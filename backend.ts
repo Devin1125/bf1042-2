@@ -25,6 +25,7 @@ import {
   roleRequestResponseSchema,
   setUserRolesBodySchema,
   setUserRolesParamsSchema,
+  sessionUserResponseSchema,
   submitOrderParamsSchema,
   toOrderResponse,
   updateMenuItemBodySchema,
@@ -174,6 +175,26 @@ app.onRequest(({ request }) => {
 });
 
 // API 路由
+
+app.get(
+  "/api/me",
+  async ({ request }) => {
+    const user = await requireUser(request);
+    return { data: user };
+  },
+  {
+    detail: {
+      tags: ["auth"],
+      summary: "Get current session user with roles",
+      description:
+        "Return the current authenticated user projected from DB, including RBAC roles.",
+    },
+    response: {
+      200: sessionUserResponseSchema,
+      401: apiErrorResponseSchema,
+    },
+  },
+);
 
 // ─── Sign-out Proxy ───────────────────────────────────────────────────────────
 // Better Auth 的 /api/auth/sign-out 有 CSRF origin 驗證（比對 trustedOrigins）。

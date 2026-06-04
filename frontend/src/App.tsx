@@ -130,16 +130,17 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
 
-    // V9: 從 Better Auth session cookie 恢復登入狀態（不再用 localStorage）
+    // 從 server 端 session 恢復登入狀態，並取得 DB 內的 RBAC roles。
     async function restoreSession() {
       try {
-        const res = await fetch(buildApiUrl("/api/auth/get-session"), {
+        const res = await fetch(buildApiUrl("/api/me"), {
           credentials: "include",
         });
         if (res.ok) {
-          const data = (await res.json()) as { user?: SessionUser } | null;
-          if (data?.user && mounted) {
-            setUser(data.user);
+          const payload =
+            (await res.json()) as ApiDataResponse<SessionUser> | null;
+          if (payload?.data && mounted) {
+            setUser(payload.data);
           }
         }
       } catch {

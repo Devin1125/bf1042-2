@@ -7,6 +7,7 @@ import {
   orderStatusSchema,
   roleRequestSchema,
   roleSchema,
+  sessionUserSchema,
 } from "./contracts.ts";
 import toTaipeiDateTime from "../util.ts";
 
@@ -152,6 +153,10 @@ export const nullableOrderResponseEnvelopeSchema = z.object({
 
 export const healthResponseSchema = z.object({
   status: z.string(),
+});
+
+export const sessionUserResponseSchema = z.object({
+  data: sessionUserSchema,
 });
 
 export const roleRequestResponseSchema = z.object({
