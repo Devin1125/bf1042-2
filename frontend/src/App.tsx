@@ -174,6 +174,14 @@ export default function App() {
     };
   }, []);
 
+  const userRoles = user?.roles ?? [];
+  const hasAnyRole = (roles: Role[]): boolean =>
+    roles.some((role) => userRoles.includes(role));
+  const canViewOperations = hasAnyRole(["staff", "chef", "owner", "admin"]);
+  const canUpdateOrderStatus = hasAnyRole(["chef", "owner", "admin"]);
+  const canManageMenu = hasAnyRole(["owner", "admin"]);
+  const isAdmin = hasAnyRole(["admin"]);
+
   useEffect(() => {
     if (!user) {
       setHistoryOrders([]);
@@ -243,14 +251,6 @@ export default function App() {
       })
       .filter((entry) => entry !== null);
   }, [cartQtyByItemId, items]);
-
-  const userRoles = user?.roles ?? [];
-  const hasAnyRole = (roles: Role[]): boolean =>
-    roles.some((role) => userRoles.includes(role));
-  const canViewOperations = hasAnyRole(["staff", "chef", "owner", "admin"]);
-  const canUpdateOrderStatus = hasAnyRole(["chef", "owner", "admin"]);
-  const canManageMenu = hasAnyRole(["owner", "admin"]);
-  const isAdmin = hasAnyRole(["admin"]);
 
   const submittedOrders = useMemo(
     () => allOrders.filter((order) => order.status !== "pending"),
