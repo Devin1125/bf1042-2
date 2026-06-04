@@ -13,6 +13,13 @@ import type {
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 const reservationLeadTimeMinutes = 30;
+const reservationPresetOptions = [
+  { label: "早餐", hour: 8, minute: 0 },
+  { label: "上午", hour: 10, minute: 0 },
+  { label: "午餐", hour: 12, minute: 0 },
+  { label: "午餐", hour: 12, minute: 30 },
+  { label: "下午", hour: 15, minute: 0 },
+];
 
 function buildApiUrl(path: string) {
   return `${apiBaseUrl}${path}`;
@@ -34,6 +41,44 @@ function getDefaultPickupAtInputValue(): string {
   const pickupAt = new Date(Date.now() + reservationLeadTimeMinutes * 60_000);
   pickupAt.setSeconds(0, 0);
   return toDateTimeLocalInputValue(pickupAt);
+}
+
+function getNextReservationSlot(hour: number, minute: number): Date {
+  const slot = new Date();
+  slot.setHours(hour, minute, 0, 0);
+
+  if (slot.getTime() < Date.now() + 60_000) {
+    slot.setDate(slot.getDate() + 1);
+  }
+
+  return slot;
+}
+
+function isSameCalendarDate(left: Date, right: Date): boolean {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  );
+}
+
+function formatReservationPresetLabel(
+  label: string,
+  hour: number,
+  minute: number,
+  date: Date,
+): string {
+  const today = new Date();
+  const tomorrow = new Date();
+  tomorrow.setDate(today.getDate() + 1);
+  const dayLabel = isSameCalendarDate(date, today)
+    ? "今天"
+    : isSameCalendarDate(date, tomorrow)
+      ? "明天"
+      : `${date.getMonth() + 1}/${date.getDate()}`;
+  const timeLabel = `${padDatePart(hour)}:${padDatePart(minute)}`;
+
+  return `${dayLabel} ${label} ${timeLabel}`;
 }
 
 function formatOrderDateTime(isoString?: string): string {
@@ -339,6 +384,24 @@ export default function App() {
     () => toDateTimeLocalInputValue(new Date()),
     [],
   );
+  const reservationPresetSlots = useMemo(
+    () =>
+      reservationPresetOptions.map((option) => {
+        const slot = getNextReservationSlot(option.hour, option.minute);
+        return {
+          ...option,
+          value: toDateTimeLocalInputValue(slot),
+          label: formatReservationPresetLabel(
+            option.label,
+            option.hour,
+            option.minute,
+            slot,
+          ),
+        };
+      }),
+    [],
+  );
+  const reservationSummary = formatOrderDateTime(reservationPickupAt);
 
   const roleView = isKitchenRoute
     ? "chef"
@@ -666,7 +729,7 @@ export default function App() {
         }
       }
 
-      setActionError("加入購物車失敗，請稍後再試。");
+      setActionError("加入預約單失敗，請稍後再試。");
       console.error(cartError);
     } finally {
       setActiveItemId(null);
@@ -701,7 +764,7 @@ export default function App() {
       setCartQtyByItemId({});
       setCartTotal(0);
     } catch (clearError) {
-      setActionError("清空購物車失敗，請稍後再試。");
+      setActionError("清空預約單失敗，請稍後再試。");
       console.error(clearError);
     } finally {
       setIsClearingCart(false);
@@ -717,12 +780,12 @@ export default function App() {
 
     const pickupDate = new Date(reservationPickupAt);
     if (!reservationPickupAt || Number.isNaN(pickupDate.getTime())) {
-      setActionError("請選擇有效的預約取餐時間。");
+      setActionError("請選擇有效的預約取餐時段。");
       return;
     }
 
     if (pickupDate.getTime() < Date.now() - 60_000) {
-      setActionError("預約取餐時間不能早於現在。");
+      setActionError("預約取餐時段不能早於現在。");
       return;
     }
 
@@ -901,7 +964,7 @@ export default function App() {
 
   function orderStatusLabel(status: OrderStatus): string {
     const labels: Record<OrderStatus, string> = {
-      pending: "購物車",
+      pending: "預約單",
       submitted: "待處理",
       preparing: "製作中",
       ready: "可取餐",
@@ -956,9 +1019,12 @@ export default function App() {
             {isCustomerRoute ? (
               <>
                 <div className="badge badge-secondary">
-                  購物車 {cartItemCount} 件
+                  預約單 {cartItemCount} 件
                 </div>
                 <div className="badge badge-accent">總計 ${cartTotal}</div>
+                <div className="badge badge-outline">
+                  取餐 {reservationSummary}
+                </div>
                 <button
                   className="btn btn-sm btn-outline"
                   onClick={() => {
@@ -966,7 +1032,7 @@ export default function App() {
                   }}
                   disabled={!user}
                 >
-                  購物車明細
+                  預約明細
                 </button>
               </>
             ) : null}
@@ -1064,6 +1130,56 @@ export default function App() {
           <div className="alert alert-warning mb-4">
             <span>{actionError}</span>
           </div>
+        ) : null}
+
+        {user && canAccessCurrentRoute && isCustomerRoute ? (
+          <section className="mb-8 bg-base-100 rounded-lg shadow-sm p-4">
+            <div className="flex flex-col lg:flex-row lg:items-end gap-4">
+              <div className="flex-1">
+                <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+                  <h2 className="text-xl font-bold">預約取餐</h2>
+                  <span className="badge badge-primary">
+                    {reservationSummary}
+                  </span>
+                </div>
+                <label className="form-control w-full">
+                  <span className="label-text font-semibold mb-2">
+                    取餐時段
+                  </span>
+                  <input
+                    type="datetime-local"
+                    className="input input-bordered w-full"
+                    value={reservationPickupAt}
+                    min={reservationPickupMin}
+                    onChange={(event) => {
+                      setReservationPickupAt(event.target.value);
+                    }}
+                  />
+                </label>
+              </div>
+              <div className="lg:w-[28rem]">
+                <div className="text-sm font-semibold mb-2">快速時段</div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {reservationPresetSlots.map((slot) => (
+                    <button
+                      key={`${slot.hour}-${slot.minute}`}
+                      type="button"
+                      className={`btn btn-sm ${
+                        reservationPickupAt === slot.value
+                          ? "btn-primary"
+                          : "btn-outline"
+                      }`}
+                      onClick={() => {
+                        setReservationPickupAt(slot.value);
+                      }}
+                    >
+                      {slot.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
         ) : null}
 
         {!canAccessCurrentRoute ? (
@@ -1204,7 +1320,7 @@ export default function App() {
                   <tr>
                     <th>訂單</th>
                     <th>狀態</th>
-                    <th>取餐</th>
+                    <th>預約取餐</th>
                     <th>內容</th>
                     {roleView !== "chef" ? <th>金額</th> : null}
                     <th>處理</th>
@@ -1269,7 +1385,7 @@ export default function App() {
                       <td colSpan={roleView === "chef" ? 5 : 6}>
                         {roleView === "chef"
                           ? "目前沒有需要製作的訂單。"
-                          : "目前沒有送出的訂單。"}
+                          : "目前沒有送出的預約單。"}
                       </td>
                     </tr>
                   ) : null}
@@ -1560,7 +1676,7 @@ export default function App() {
                         >
                           {activeItemId === item.id
                             ? "加入中..."
-                            : `加入購物車${cartQtyByItemId[item.id] ? ` (${cartQtyByItemId[item.id]})` : ""}`}
+                            : `加入預約單${cartQtyByItemId[item.id] ? ` (${cartQtyByItemId[item.id]})` : ""}`}
                         </button>
                       </div>
                     </div>
@@ -1595,7 +1711,7 @@ export default function App() {
                         <span className="badge badge-success">已送出</span>
                       </div>
                       <p className="text-sm font-medium">
-                        取餐時間：{formatOrderDateTime(order.pickupAt)}
+                        預約取餐：{formatOrderDateTime(order.pickupAt)}
                       </p>
                       <p className="text-sm opacity-70">
                         建立時間：{formatOrderDateTime(order.createdAt)}
@@ -1633,7 +1749,7 @@ export default function App() {
           />
           <aside className="fixed right-0 top-0 h-full w-full max-w-md bg-base-100 shadow-2xl z-10 flex flex-col">
             <div className="p-4 border-b border-base-300 flex items-center justify-between">
-              <h2 className="text-xl font-bold">購物車明細</h2>
+              <h2 className="text-xl font-bold">預約明細</h2>
               <button
                 className="btn btn-sm btn-ghost"
                 onClick={() => {
@@ -1647,7 +1763,7 @@ export default function App() {
             <div className="p-4 flex-1 overflow-auto">
               {cartDetails.length === 0 ? (
                 <div className="alert">
-                  <span>購物車目前是空的。</span>
+                  <span>預約單目前是空的。</span>
                 </div>
               ) : (
                 <ul className="space-y-3">
@@ -1672,7 +1788,7 @@ export default function App() {
             <div className="p-4 border-t border-base-300 space-y-3">
               <label className="form-control w-full">
                 <div className="label">
-                  <span className="label-text font-semibold">預約取餐時間</span>
+                  <span className="label-text font-semibold">預約取餐時段</span>
                 </div>
                 <input
                   type="datetime-local"
@@ -1684,6 +1800,25 @@ export default function App() {
                   }}
                   disabled={cartDetails.length === 0 || isSubmittingOrder}
                 />
+                <div className="grid grid-cols-2 gap-2 mt-3">
+                  {reservationPresetSlots.map((slot) => (
+                    <button
+                      key={`drawer-${slot.hour}-${slot.minute}`}
+                      type="button"
+                      className={`btn btn-xs ${
+                        reservationPickupAt === slot.value
+                          ? "btn-primary"
+                          : "btn-outline"
+                      }`}
+                      onClick={() => {
+                        setReservationPickupAt(slot.value);
+                      }}
+                      disabled={cartDetails.length === 0 || isSubmittingOrder}
+                    >
+                      {slot.label}
+                    </button>
+                  ))}
+                </div>
               </label>
               <label className="form-control w-full">
                 <div className="label">
@@ -1715,7 +1850,7 @@ export default function App() {
                 }}
                 disabled={cartDetails.length === 0 || isClearingCart}
               >
-                {isClearingCart ? "清空中..." : "清空購物車"}
+                {isClearingCart ? "清空中..." : "清空預約單"}
               </button>
               <button
                 className="btn btn-primary w-full"
@@ -1728,7 +1863,7 @@ export default function App() {
                   !reservationPickupAt
                 }
               >
-                {isSubmittingOrder ? "送出中..." : "預約送出訂單"}
+                {isSubmittingOrder ? "送出中..." : "送出預約單"}
               </button>
             </div>
           </aside>

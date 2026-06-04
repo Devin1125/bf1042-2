@@ -817,6 +817,12 @@ app.post(
     const user = await requireUser(request);
     const orderId = parseInt(params.id, 10);
     const trimmedNote = body.note?.trim();
+    const pickupDate = new Date(body.pickupAt);
+    if (pickupDate.getTime() < Date.now() - 60_000) {
+      set.status = 400;
+      return { error: "Pickup time cannot be in the past" };
+    }
+
     const result = await store.submitOrder(orderId, {
       userId: user.id,
       pickupAt: body.pickupAt,
