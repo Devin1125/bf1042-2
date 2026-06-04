@@ -104,7 +104,7 @@ HOST=localhost
 DATABASE_URL=postgresql://user:pass@host-pooler.region.aws.neon.tech/dbname?sslmode=require
 DATABASE_URL_MIGRATION=postgresql://user:pass@host.region.aws.neon.tech/dbname?sslmode=require
 STORE_DRIVER=postgres
-PG_SCHEMA=bf_v9
+PG_SCHEMA=bf_v10
 
 # Better Auth 設定
 BETTER_AUTH_URL=http://localhost:3000
@@ -124,7 +124,7 @@ GOOGLE_CLIENT_SECRET=GOCSPX-你的-google-secret
 | `DATABASE_URL`           | Neon Pooled Connection（一般查詢用）   | `postgresql://...pooler...`                                             |
 | `DATABASE_URL_MIGRATION` | Neon Direct Connection（migration 用） | `postgresql://...`                                                      |
 | `STORE_DRIVER`           | 資料儲存驅動                           | `postgres`（生產）或 `json`（開發）                                     |
-| `PG_SCHEMA`              | PostgreSQL schema 名稱                 | `bf_v9`（建議不用 `public`）                                            |
+| `PG_SCHEMA`              | PostgreSQL schema 名稱                 | `bf_v10`（建議不用 `public`）                                           |
 | `BETTER_AUTH_URL`        | Better Auth 基礎 URL                   | 本地：`http://localhost:3000`<br/>生產：`https://your-app.onrender.com` |
 | `BETTER_AUTH_SECRET`     | Better Auth 加密密鑰                   | 至少 32 字元隨機字串                                                    |
 | `GOOGLE_CLIENT_ID`       | Google OAuth Client ID                 | 從 Google Cloud Console 取得                                            |
@@ -197,7 +197,7 @@ bun run db:reset
 
 **資料庫 Schema 結構**：
 
-V9 使用獨立的 PostgreSQL schema (`bf_v9`)，包含以下資料表：
+V10 使用獨立的 PostgreSQL schema (`bf_v10`)，包含以下資料表：
 
 | 資料表         | 說明                   | 關鍵欄位                           |
 | -------------- | ---------------------- | ---------------------------------- |
@@ -354,7 +354,7 @@ HOST=0.0.0.0
 DATABASE_URL=postgresql://user:pass@host-pooler.region.aws.neon.tech/dbname?sslmode=require
 DATABASE_URL_MIGRATION=postgresql://user:pass@host.region.aws.neon.tech/dbname?sslmode=require
 STORE_DRIVER=postgres
-PG_SCHEMA=bf_v9
+PG_SCHEMA=bf_v10
 
 # Better Auth（❗ 重要：使用正式網址）
 BETTER_AUTH_URL=https://你的app名稱.onrender.com

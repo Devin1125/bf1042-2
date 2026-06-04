@@ -8,13 +8,13 @@ import {
 import { user } from "./auth-schema.ts";
 
 // PostgreSQL namespace 隔離
-// 透過 PG_SCHEMA 環境變數切換，預設 "bf_v9"
-// V9 使用 bf_v9（Better Auth 整合版本）
+// 透過 PG_SCHEMA 環境變數切換，預設 "bf_v10"
+// V10 使用 bf_v10（RBAC 權限系統版本）
 // 注意：不能使用 "public" 作為 schema 名稱（Drizzle 限制）
-const schemaName = process.env.PG_SCHEMA || "bf_v9";
+const schemaName = process.env.PG_SCHEMA || "bf_v10";
 if (schemaName === "public") {
   throw new Error(
-    'PG_SCHEMA cannot be "public". Use a custom schema name or leave it unset to use the default "bf_v9".',
+    'PG_SCHEMA cannot be "public". Use a custom schema name or leave it unset to use the default "bf_v10".',
   );
 }
 const appSchema = pgSchema(schemaName);

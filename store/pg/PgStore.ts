@@ -387,8 +387,8 @@ export class PgStore implements Store {
       );
     }
 
-    // V9: 不再播 orders seed data（orders 的 user_id FK 指向 Better Auth user 表，
-    // seed JSON 中的舊 userId 在 bf_v9.user 不存在，強制播入會觸發 FK violation）
+    // V10: 不再播 orders seed data（orders 的 user_id FK 指向 Better Auth user 表，
+    // seed JSON 中的舊 userId 在 Better Auth user 表不存在，強制播入會觸發 FK violation）
 
     const schema = process.env.PG_SCHEMA ?? "public";
     await db.execute(

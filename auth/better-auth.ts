@@ -35,7 +35,7 @@ const isGoogleProviderConfigured = Boolean(
 
 // ─── Better Auth instance ─────────────────────────────────────────────────────
 // V9：只使用 Google OAuth 登入，不提供 email/password 方式。
-// auth tables（user / session / account / verification）存在 bf_v9 schema 下，
+// auth tables（user / session / account / verification）存在 bf_v10 schema 下，
 // 與業務 tables（menu_items / orders / order_items）並存於同一 DB。
 export const auth = betterAuth({
   baseURL,
