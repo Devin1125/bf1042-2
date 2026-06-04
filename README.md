@@ -24,7 +24,7 @@ Devin的早餐店 - 完整版
 - ✅ Session-based 認證（HttpOnly cookies）
 - ✅ RBAC 角色權限、角色申請審核、使用者角色管理
 - ✅ 店員/廚師營運工作台、訂單狀態追蹤、營收摘要
-- ✅ 完整的訂單流程（購物車 → 送出 → 歷史記錄）
+- ✅ 完整的預約點餐流程（購物車 → 選擇取餐時間 → 送出 → 歷史記錄）
 - ✅ 部署整合模式（單一 Node 運行）
 
 ## V10 RBAC 權限系統
@@ -202,7 +202,7 @@ V10 使用獨立的 PostgreSQL schema (`bf_v10`)，包含以下資料表：
 | 資料表         | 說明                   | 關鍵欄位                           |
 | -------------- | ---------------------- | ---------------------------------- |
 | `menu_items`   | 菜單資料               | `id`, `name`, `price`, `category`  |
-| `orders`       | 訂單主表               | `id`, `user_id`, `total`, `status` |
+| `orders`       | 訂單主表               | `id`, `user_id`, `total`, `status`, `pickup_at`, `note` |
 | `order_items`  | 訂單項目               | `order_id`, `item_id`, `qty`       |
 | `user`         | Better Auth 用戶表     | `id`, `email`, `name`              |
 | `session`      | Better Auth 會話表     | `token`, `expires_at`              |
@@ -547,7 +547,7 @@ http://localhost:3000/swagger
 | `/api/orders`              | POST  | 建立訂單     | ✅     |
 | `/api/orders/current`      | GET   | 取得當前訂單 | ✅     |
 | `/api/orders/:id`          | PATCH | 更新訂單項目 | ✅     |
-| `/api/orders/:id/submit`   | POST  | 送出訂單     | ✅     |
+| `/api/orders/:id/submit`   | POST  | 預約送出訂單 | ✅     |
 | `/api/orders/history`      | GET   | 訂單歷史     | ✅     |
 
 ## 學習資源

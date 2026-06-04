@@ -60,6 +60,8 @@ export const orderSchema = z.object({
   status: orderStatusSchema,
   createdAt: z.string().min(1),
   submittedAt: z.string().min(1).optional(),
+  pickupAt: z.string().min(1).optional(),
+  note: z.string().optional(),
 });
 
 export const roleRequestSchema = z.object({

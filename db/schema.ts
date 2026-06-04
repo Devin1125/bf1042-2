@@ -21,7 +21,7 @@ const appSchema = pgSchema(schemaName);
 
 // 對照 shared/contracts.ts：
 //   MenuItem { id, name, price, category, description, image_url }
-//   Order { id, userId: string, total, status, createdAt, submittedAt }
+//   Order { id, userId: string, total, status, createdAt, submittedAt, pickupAt, note }
 //   OrderItem { item: MenuItem, qty }  → order_items（反正規化）
 //
 // V9 設計：userId 直接對應 Better Auth 的 user.id（text PK）
@@ -45,6 +45,8 @@ export const ordersTable = appSchema.table("orders", {
   status: text("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   submittedAt: timestamp("submitted_at", { withTimezone: true }),
+  pickupAt: timestamp("pickup_at", { withTimezone: true }),
+  note: text("note"),
 });
 
 export const roleRequestsTable = appSchema.table("role_requests", {

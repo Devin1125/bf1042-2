@@ -12,9 +12,49 @@ import type {
 } from "../../shared/contracts.ts";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+const reservationLeadTimeMinutes = 30;
 
 function buildApiUrl(path: string) {
   return `${apiBaseUrl}${path}`;
+}
+
+function padDatePart(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function toDateTimeLocalInputValue(date: Date): string {
+  return [
+    date.getFullYear(),
+    padDatePart(date.getMonth() + 1),
+    padDatePart(date.getDate()),
+  ].join("-") + `T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
+}
+
+function getDefaultPickupAtInputValue(): string {
+  const pickupAt = new Date(Date.now() + reservationLeadTimeMinutes * 60_000);
+  pickupAt.setSeconds(0, 0);
+  return toDateTimeLocalInputValue(pickupAt);
+}
+
+function formatOrderDateTime(isoString?: string): string {
+  if (!isoString) {
+    return "未指定";
+  }
+
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) {
+    return isoString;
+  }
+
+  return new Intl.DateTimeFormat("zh-TW", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
 }
 
 export default function App() {
@@ -36,6 +76,10 @@ export default function App() {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isClearingCart, setIsClearingCart] = useState(false);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [reservationPickupAt, setReservationPickupAt] = useState(() =>
+    getDefaultPickupAtInputValue(),
+  );
+  const [reservationNote, setReservationNote] = useState("");
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [roleRequests, setRoleRequests] = useState<RoleRequest[]>([]);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
@@ -80,6 +124,8 @@ export default function App() {
     setCartQtyByItemId({});
     setCartTotal(0);
     setIsCartOpen(false);
+    setReservationPickupAt(getDefaultPickupAtInputValue());
+    setReservationNote("");
   }
 
   async function loadCurrentOrder(): Promise<Order | null> {
@@ -288,6 +334,11 @@ export default function App() {
       })
       .filter((entry) => entry !== null);
   }, [cartQtyByItemId, items]);
+
+  const reservationPickupMin = useMemo(
+    () => toDateTimeLocalInputValue(new Date()),
+    [],
+  );
 
   const roleView = isKitchenRoute
     ? "chef"
@@ -663,6 +714,18 @@ export default function App() {
     }
 
     setActionError("");
+
+    const pickupDate = new Date(reservationPickupAt);
+    if (!reservationPickupAt || Number.isNaN(pickupDate.getTime())) {
+      setActionError("請選擇有效的預約取餐時間。");
+      return;
+    }
+
+    if (pickupDate.getTime() < Date.now() - 60_000) {
+      setActionError("預約取餐時間不能早於現在。");
+      return;
+    }
+
     setIsSubmittingOrder(true);
 
     try {
@@ -672,7 +735,10 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({}),
+          body: JSON.stringify({
+            pickupAt: pickupDate.toISOString(),
+            note: reservationNote.trim() || undefined,
+          }),
         },
       );
 
@@ -1138,6 +1204,7 @@ export default function App() {
                   <tr>
                     <th>訂單</th>
                     <th>狀態</th>
+                    <th>取餐</th>
                     <th>內容</th>
                     {roleView !== "chef" ? <th>金額</th> : null}
                     <th>處理</th>
@@ -1153,9 +1220,21 @@ export default function App() {
                         </span>
                       </td>
                       <td>
-                        {order.items
-                          .map((detail) => `${detail.item.name} x${detail.qty}`)
-                          .join("、")}
+                        {formatOrderDateTime(order.pickupAt)}
+                      </td>
+                      <td>
+                        <div>
+                          {order.items
+                            .map(
+                              (detail) => `${detail.item.name} x${detail.qty}`,
+                            )
+                            .join("、")}
+                        </div>
+                        {order.note ? (
+                          <div className="text-xs opacity-70 mt-1">
+                            備註：{order.note}
+                          </div>
+                        ) : null}
                       </td>
                       {roleView !== "chef" ? <td>${order.total}</td> : null}
                       <td>
@@ -1187,7 +1266,7 @@ export default function App() {
                   ))}
                   {submittedOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={roleView === "chef" ? 4 : 5}>
+                      <td colSpan={roleView === "chef" ? 5 : 6}>
                         {roleView === "chef"
                           ? "目前沒有需要製作的訂單。"
                           : "目前沒有送出的訂單。"}
@@ -1515,9 +1594,15 @@ export default function App() {
                         <h3 className="font-semibold">訂單 #{order.id}</h3>
                         <span className="badge badge-success">已送出</span>
                       </div>
-                      <p className="text-sm opacity-70">
-                        建立時間：{order.createdAt}
+                      <p className="text-sm font-medium">
+                        取餐時間：{formatOrderDateTime(order.pickupAt)}
                       </p>
+                      <p className="text-sm opacity-70">
+                        建立時間：{formatOrderDateTime(order.createdAt)}
+                      </p>
+                      {order.note ? (
+                        <p className="text-sm opacity-80">備註：{order.note}</p>
+                      ) : null}
                       <ul className="text-sm list-disc pl-5 space-y-1">
                         {order.items.map((detail) => (
                           <li key={`${order.id}-${detail.item.id}`}>
@@ -1585,6 +1670,36 @@ export default function App() {
             </div>
 
             <div className="p-4 border-t border-base-300 space-y-3">
+              <label className="form-control w-full">
+                <div className="label">
+                  <span className="label-text font-semibold">預約取餐時間</span>
+                </div>
+                <input
+                  type="datetime-local"
+                  className="input input-bordered w-full"
+                  value={reservationPickupAt}
+                  min={reservationPickupMin}
+                  onChange={(event) => {
+                    setReservationPickupAt(event.target.value);
+                  }}
+                  disabled={cartDetails.length === 0 || isSubmittingOrder}
+                />
+              </label>
+              <label className="form-control w-full">
+                <div className="label">
+                  <span className="label-text font-semibold">備註</span>
+                </div>
+                <textarea
+                  className="textarea textarea-bordered min-h-20"
+                  value={reservationNote}
+                  maxLength={200}
+                  placeholder="例如：不要辣、餐點分袋"
+                  onChange={(event) => {
+                    setReservationNote(event.target.value);
+                  }}
+                  disabled={cartDetails.length === 0 || isSubmittingOrder}
+                />
+              </label>
               <div className="flex items-center justify-between font-semibold">
                 <span>總件數</span>
                 <span>{cartItemCount}</span>
@@ -1607,9 +1722,13 @@ export default function App() {
                 onClick={() => {
                   void submitOrder();
                 }}
-                disabled={cartDetails.length === 0 || isSubmittingOrder}
+                disabled={
+                  cartDetails.length === 0 ||
+                  isSubmittingOrder ||
+                  !reservationPickupAt
+                }
               >
-                {isSubmittingOrder ? "送出中..." : "送出訂單"}
+                {isSubmittingOrder ? "送出中..." : "預約送出訂單"}
               </button>
             </div>
           </aside>

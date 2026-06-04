@@ -26,6 +26,7 @@ export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>;
 
 export const orderResponseSchema = orderSchema.extend({
   createdAtTaipei: z.string().min(1),
+  pickupAtTaipei: z.string().min(1).optional(),
 });
 
 export type OrderResponse = z.infer<typeof orderResponseSchema>;
@@ -38,6 +39,9 @@ export function toOrderResponse(order: Order): OrderResponse {
   return {
     ...order,
     createdAtTaipei: toTaipeiDateTime(order.createdAt),
+    pickupAtTaipei: order.pickupAt
+      ? toTaipeiDateTime(order.pickupAt)
+      : undefined,
   };
 }
 
@@ -97,6 +101,14 @@ export const updateOrderStatusBodySchema = z.object({
 /** POST /api/orders/:id/submit */
 export const submitOrderParamsSchema = z.object({
   id: z.string().regex(/^[0-9]+$/),
+});
+
+export const submitOrderBodySchema = z.object({
+  pickupAt: z.string().min(1).refine((value) => {
+    const pickupDate = new Date(value);
+    return !Number.isNaN(pickupDate.getTime());
+  }, "pickupAt must be a valid date time"),
+  note: z.string().max(200).optional(),
 });
 
 /** POST /api/users/me/role-request */

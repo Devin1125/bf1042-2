@@ -178,6 +178,14 @@ export class JsonFileStore implements Store {
           })),
           status: normalizeOrderStatus(order.status),
           submittedAt: order.status === "pending" ? undefined : order.submittedAt,
+          pickupAt:
+            typeof order.pickupAt === "string" && order.pickupAt.length > 0
+              ? order.pickupAt
+              : undefined,
+          note:
+            typeof order.note === "string" && order.note.length > 0
+              ? order.note
+              : undefined,
         })),
         userIdCounter: parsed.userIdCounter ?? 0,
         menuIdCounter: parsed.menuIdCounter ?? 0,
@@ -394,7 +402,7 @@ export class JsonFileStore implements Store {
 
   async submitOrder(
     orderId: number,
-    input: { userId: string },
+    input: { userId: string; pickupAt?: string; note?: string },
   ): Promise<
     | { ok: true; order: Order }
     | {
@@ -425,6 +433,8 @@ export class JsonFileStore implements Store {
 
     order.status = "submitted";
     order.submittedAt = new Date().toISOString();
+    order.pickupAt = input.pickupAt ?? order.submittedAt;
+    order.note = input.note;
     await this.persist();
 
     return { ok: true, order };

@@ -28,6 +28,8 @@ interface SeedData {
     total: number;
     createdAt: string;
     submittedAt?: string;
+    pickupAt?: string;
+    note?: string;
     items: Array<{ item: MenuItem; qty: number }>;
   }>;
 }
@@ -295,7 +297,7 @@ export class PgStore implements Store {
 
   async submitOrder(
     orderId: number,
-    input: { userId: string },
+    input: { userId: string; pickupAt?: string; note?: string },
   ): Promise<
     | { ok: true; order: Order }
     | {
@@ -316,14 +318,22 @@ export class PgStore implements Store {
     if (order.items.length === 0) return { ok: false, code: "EMPTY_ORDER" };
 
     const submittedAt = new Date().toISOString();
+    const pickupAt = input.pickupAt ?? submittedAt;
 
     await db
       .update(ordersTable)
-      .set({ status: "submitted", submittedAt: new Date(submittedAt) })
+      .set({
+        status: "submitted",
+        submittedAt: new Date(submittedAt),
+        pickupAt: new Date(pickupAt),
+        note: input.note ?? null,
+      })
       .where(eq(ordersTable.id, orderId));
 
     order.status = "submitted";
     order.submittedAt = submittedAt;
+    order.pickupAt = pickupAt;
+    order.note = input.note;
 
     return { ok: true, order };
   }
@@ -455,6 +465,12 @@ export class PgStore implements Store {
           ? row.submittedAt.toISOString()
           : new Date(row.submittedAt).toISOString()
         : undefined,
+      pickupAt: row.pickupAt
+        ? row.pickupAt instanceof Date
+          ? row.pickupAt.toISOString()
+          : new Date(row.pickupAt).toISOString()
+        : undefined,
+      note: row.note ?? undefined,
     }));
   }
 }

@@ -26,6 +26,7 @@ import {
   setUserRolesBodySchema,
   setUserRolesParamsSchema,
   sessionUserResponseSchema,
+  submitOrderBodySchema,
   submitOrderParamsSchema,
   toOrderResponse,
   updateMenuItemBodySchema,
@@ -812,10 +813,15 @@ app.patch(
 // 送出訂單
 app.post(
   "/api/orders/:id/submit",
-  async ({ params, request, set }) => {
+  async ({ params, body, request, set }) => {
     const user = await requireUser(request);
     const orderId = parseInt(params.id, 10);
-    const result = await store.submitOrder(orderId, { userId: user.id });
+    const trimmedNote = body.note?.trim();
+    const result = await store.submitOrder(orderId, {
+      userId: user.id,
+      pickupAt: body.pickupAt,
+      note: trimmedNote ? trimmedNote : undefined,
+    });
 
     if (!result.ok && result.code === "ORDER_NOT_FOUND") {
       set.status = 404;
@@ -846,10 +852,12 @@ app.post(
   },
   {
     params: submitOrderParamsSchema,
+    body: submitOrderBodySchema,
     detail: {
       tags: ["orders"],
       summary: "Submit order",
-      description: "Submit a pending order that belongs to the user.",
+      description:
+        "Submit a pending order that belongs to the user with a reserved pickup time.",
     },
     response: {
       200: orderResponseEnvelopeSchema,
