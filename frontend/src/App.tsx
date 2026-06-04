@@ -1,9 +1,13 @@
 import { useEffect, useState, useMemo } from "react";
 import "./App.css";
 import type {
+  AdminUser,
   ApiDataResponse,
   MenuItem,
   Order,
+  OrderStatus,
+  Role,
+  RoleRequest,
   SessionUser,
 } from "../../shared/contracts.ts";
 
@@ -32,6 +36,25 @@ export default function App() {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isClearingCart, setIsClearingCart] = useState(false);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [roleRequests, setRoleRequests] = useState<RoleRequest[]>([]);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [operationsLoading, setOperationsLoading] = useState(false);
+  const [roleRequestRole, setRoleRequestRole] = useState<"staff" | "chef">(
+    "staff",
+  );
+  const [roleRequestReason, setRoleRequestReason] = useState("");
+  const [roleRequestMessage, setRoleRequestMessage] = useState("");
+  const [menuDraft, setMenuDraft] = useState({
+    name: "",
+    price: "",
+    category: "",
+    description: "",
+    image_url: "",
+  });
+  const [selectedRoleByUserId, setSelectedRoleByUserId] = useState<
+    Record<string, Role>
+  >({});
 
   function syncCartFromOrder(order: Order) {
     const nextQtyByItemId = order.items.reduce(
@@ -154,6 +177,9 @@ export default function App() {
   useEffect(() => {
     if (!user) {
       setHistoryOrders([]);
+      setAllOrders([]);
+      setRoleRequests([]);
+      setAdminUsers([]);
       setIsCartOpen(false);
       resetCartState();
       return;
@@ -164,6 +190,13 @@ export default function App() {
       console.error(refreshError);
     });
   }, [user]);
+
+  useEffect(() => {
+    void loadOperationsData().catch((operationsError) => {
+      setActionError("載入營運資料失敗，請稍後再試。");
+      console.error(operationsError);
+    });
+  }, [user?.id, userRoles.join(",")]);
 
   const grouped = useMemo(() => {
     const groupedItems = items.reduce(
@@ -210,6 +243,94 @@ export default function App() {
       })
       .filter((entry) => entry !== null);
   }, [cartQtyByItemId, items]);
+
+  const userRoles = user?.roles ?? [];
+  const hasAnyRole = (roles: Role[]): boolean =>
+    roles.some((role) => userRoles.includes(role));
+  const canViewOperations = hasAnyRole(["staff", "chef", "owner", "admin"]);
+  const canUpdateOrderStatus = hasAnyRole(["chef", "owner", "admin"]);
+  const canManageMenu = hasAnyRole(["owner", "admin"]);
+  const isAdmin = hasAnyRole(["admin"]);
+
+  const submittedOrders = useMemo(
+    () => allOrders.filter((order) => order.status !== "pending"),
+    [allOrders],
+  );
+
+  const salesSummary = useMemo(() => {
+    const completedOrders = allOrders.filter(
+      (order) => order.status !== "pending" && order.status !== "cancelled",
+    );
+    const totalRevenue = completedOrders.reduce(
+      (sum, order) => sum + order.total,
+      0,
+    );
+    const topItems = new Map<string, { name: string; qty: number }>();
+
+    for (const order of completedOrders) {
+      for (const detail of order.items) {
+        const key = String(detail.item.id);
+        const current = topItems.get(key) ?? {
+          name: detail.item.name,
+          qty: 0,
+        };
+        current.qty += detail.qty;
+        topItems.set(key, current);
+      }
+    }
+
+    return {
+      orderCount: completedOrders.length,
+      totalRevenue,
+      topItems: Array.from(topItems.values())
+        .sort((a, b) => b.qty - a.qty)
+        .slice(0, 3),
+    };
+  }, [allOrders]);
+
+  async function loadOperationsData(): Promise<void> {
+    if (!user || !canViewOperations) {
+      setAllOrders([]);
+      return;
+    }
+
+    setOperationsLoading(true);
+    try {
+      const ordersResponse = await fetch(buildApiUrl("/api/orders"), {
+        credentials: "include",
+      });
+      if (ordersResponse.ok) {
+        const payload =
+          (await ordersResponse.json()) as ApiDataResponse<Order[]>;
+        setAllOrders(Array.isArray(payload.data) ? payload.data : []);
+      }
+
+      if (isAdmin) {
+        const [requestsResponse, usersResponse] = await Promise.all([
+          fetch(buildApiUrl("/api/admin/role-requests?status=all"), {
+            credentials: "include",
+          }),
+          fetch(buildApiUrl("/api/admin/users"), {
+            credentials: "include",
+          }),
+        ]);
+
+        if (requestsResponse.ok) {
+          const payload =
+            (await requestsResponse.json()) as ApiDataResponse<RoleRequest[]>;
+          setRoleRequests(Array.isArray(payload.data) ? payload.data : []);
+        }
+
+        if (usersResponse.ok) {
+          const payload =
+            (await usersResponse.json()) as ApiDataResponse<AdminUser[]>;
+          setAdminUsers(Array.isArray(payload.data) ? payload.data : []);
+        }
+      }
+    } finally {
+      setOperationsLoading(false);
+    }
+  }
 
   async function ensureOrder(): Promise<number> {
     if (!user) {
@@ -470,12 +591,166 @@ export default function App() {
       resetCartState();
       setIsCartOpen(false);
       await loadOrderHistory();
+      await loadOperationsData();
     } catch (submitError) {
       setActionError("送出訂單失敗，請稍後再試。");
       console.error(submitError);
     } finally {
       setIsSubmittingOrder(false);
     }
+  }
+
+  async function submitRoleRequest(): Promise<void> {
+    setRoleRequestMessage("");
+    const response = await fetch(buildApiUrl("/api/users/me/role-request"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        requestedRole: roleRequestRole,
+        reason: roleRequestReason,
+      }),
+    });
+
+    if (!response.ok) {
+      setRoleRequestMessage("申請送出失敗，請確認是否已有待審核申請。");
+      return;
+    }
+
+    setRoleRequestReason("");
+    setRoleRequestMessage("申請已送出。");
+  }
+
+  async function createMenuItem(): Promise<void> {
+    setActionError("");
+    const price = Number.parseInt(menuDraft.price, 10);
+    if (!menuDraft.name || !Number.isFinite(price)) {
+      setActionError("新增品項失敗，請確認品名與價格。");
+      return;
+    }
+
+    const response = await fetch(buildApiUrl("/api/menu"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        ...menuDraft,
+        price,
+        image_url:
+          menuDraft.image_url ||
+          "https://images.unsplash.com/photo-1525351484163-7529414344d8?auto=format&fit=crop&w=800&q=80",
+      }),
+    });
+
+    if (!response.ok) {
+      setActionError("新增菜單品項失敗。");
+      return;
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<MenuItem>;
+    setItems((current) => [...current, payload.data]);
+    setMenuDraft({
+      name: "",
+      price: "",
+      category: "",
+      description: "",
+      image_url: "",
+    });
+  }
+
+  async function deleteMenuItem(menuId: number): Promise<void> {
+    const response = await fetch(buildApiUrl(`/api/menu/${menuId}`), {
+      method: "DELETE",
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      setActionError("刪除菜單品項失敗。");
+      return;
+    }
+
+    setItems((current) => current.filter((item) => item.id !== menuId));
+  }
+
+  async function updateOrderStatus(
+    orderId: number,
+    status: Exclude<OrderStatus, "pending">,
+  ): Promise<void> {
+    const response = await fetch(buildApiUrl(`/api/orders/${orderId}/status`), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ status }),
+    });
+
+    if (!response.ok) {
+      setActionError("更新訂單狀態失敗。");
+      return;
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<Order>;
+    setAllOrders((current) =>
+      current.map((order) => (order.id === orderId ? payload.data : order)),
+    );
+  }
+
+  async function reviewRoleRequest(
+    requestId: number,
+    status: "approved" | "rejected",
+  ): Promise<void> {
+    const response = await fetch(
+      buildApiUrl(`/api/admin/role-requests/${requestId}`),
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ status }),
+      },
+    );
+
+    if (!response.ok) {
+      setActionError("審核角色申請失敗。");
+      return;
+    }
+
+    await loadOperationsData();
+  }
+
+  async function setUserRoles(targetUser: AdminUser, mode: "add" | "reset") {
+    const selectedRole = selectedRoleByUserId[targetUser.id] ?? "customer";
+    const roles =
+      mode === "reset"
+        ? [selectedRole]
+        : Array.from(new Set([...targetUser.roles, selectedRole]));
+
+    const response = await fetch(
+      buildApiUrl(`/api/admin/users/${targetUser.id}/roles`),
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ roles }),
+      },
+    );
+
+    if (!response.ok) {
+      setActionError("更新使用者角色失敗。");
+      return;
+    }
+
+    await loadOperationsData();
+  }
+
+  function orderStatusLabel(status: OrderStatus): string {
+    const labels: Record<OrderStatus, string> = {
+      pending: "購物車",
+      submitted: "待處理",
+      preparing: "製作中",
+      ready: "可取餐",
+      completed: "已完成",
+      cancelled: "已取消",
+    };
+    return labels[status];
   }
 
   if (loading) {
@@ -507,6 +782,11 @@ export default function App() {
             <div className="badge badge-outline">
               {user ? `已登入 ${user.name}` : "尚未登入"}
             </div>
+            {user ? (
+              <div className="badge badge-info">
+                {userRoles.map((role) => role.toUpperCase()).join(" / ")}
+              </div>
+            ) : null}
             <div className="badge badge-primary">
               {items.length} 個品項・{grouped.categories.length} 類
             </div>
@@ -567,6 +847,384 @@ export default function App() {
           <div className="alert alert-warning mb-4">
             <span>{actionError}</span>
           </div>
+        ) : null}
+
+        {user ? (
+          <section className="max-w-xl mx-auto card bg-base-100 shadow-sm mb-8">
+            <div className="card-body">
+              <h2 className="card-title">角色申請</h2>
+              <div className="grid gap-3">
+                <select
+                  className="select select-bordered"
+                  value={roleRequestRole}
+                  onChange={(event) => {
+                    setRoleRequestRole(event.target.value as "staff" | "chef");
+                  }}
+                >
+                  <option value="staff">店員</option>
+                  <option value="chef">廚師</option>
+                </select>
+                <textarea
+                  className="textarea textarea-bordered min-h-24"
+                  value={roleRequestReason}
+                  onChange={(event) => {
+                    setRoleRequestReason(event.target.value);
+                  }}
+                  placeholder="申請原因"
+                />
+                <button
+                  className="btn btn-outline"
+                  onClick={() => {
+                    void submitRoleRequest();
+                  }}
+                  disabled={roleRequestReason.trim().length < 10}
+                >
+                  送出申請
+                </button>
+                {roleRequestMessage ? (
+                  <div className="alert">
+                    <span>{roleRequestMessage}</span>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        {canViewOperations ? (
+          <section className="mb-10">
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+              <h2 className="text-2xl font-bold">營運工作台</h2>
+              <button
+                className="btn btn-sm btn-outline"
+                onClick={() => {
+                  void loadOperationsData();
+                }}
+                disabled={operationsLoading}
+              >
+                {operationsLoading ? "更新中..." : "重新整理"}
+              </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <div className="stat bg-base-100 rounded-lg shadow-sm">
+                <div className="stat-title">有效訂單</div>
+                <div className="stat-value text-primary">
+                  {salesSummary.orderCount}
+                </div>
+              </div>
+              <div className="stat bg-base-100 rounded-lg shadow-sm">
+                <div className="stat-title">營收</div>
+                <div className="stat-value text-success">
+                  ${salesSummary.totalRevenue}
+                </div>
+              </div>
+              <div className="stat bg-base-100 rounded-lg shadow-sm">
+                <div className="stat-title">熱門品項</div>
+                <div className="stat-desc">
+                  {salesSummary.topItems.length > 0
+                    ? salesSummary.topItems
+                        .map((item) => `${item.name} x${item.qty}`)
+                        .join("、")
+                    : "尚無資料"}
+                </div>
+              </div>
+            </div>
+            <div className="overflow-x-auto bg-base-100 rounded-lg shadow-sm">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>訂單</th>
+                    <th>狀態</th>
+                    <th>內容</th>
+                    <th>金額</th>
+                    <th>處理</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {submittedOrders.map((order) => (
+                    <tr key={order.id}>
+                      <td>#{order.id}</td>
+                      <td>
+                        <span className="badge">
+                          {orderStatusLabel(order.status)}
+                        </span>
+                      </td>
+                      <td>
+                        {order.items
+                          .map((detail) => `${detail.item.name} x${detail.qty}`)
+                          .join("、")}
+                      </td>
+                      <td>${order.total}</td>
+                      <td>
+                        {canUpdateOrderStatus ? (
+                          <select
+                            className="select select-bordered select-sm"
+                            value={order.status}
+                            onChange={(event) => {
+                              void updateOrderStatus(
+                                order.id,
+                                event.target.value as Exclude<
+                                  OrderStatus,
+                                  "pending"
+                                >,
+                              );
+                            }}
+                          >
+                            <option value="submitted">待處理</option>
+                            <option value="preparing">製作中</option>
+                            <option value="ready">可取餐</option>
+                            <option value="completed">已完成</option>
+                            <option value="cancelled">已取消</option>
+                          </select>
+                        ) : (
+                          <span className="text-sm opacity-60">唯讀</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {submittedOrders.length === 0 ? (
+                    <tr>
+                      <td colSpan={5}>目前沒有送出的訂單。</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ) : null}
+
+        {canManageMenu ? (
+          <section className="mb-10">
+            <h2 className="text-2xl font-bold mb-4">菜單管理</h2>
+            <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-4">
+              <div className="card bg-base-100 shadow-sm">
+                <div className="card-body">
+                  <h3 className="card-title">新增品項</h3>
+                  <input
+                    className="input input-bordered"
+                    value={menuDraft.name}
+                    onChange={(event) =>
+                      setMenuDraft((draft) => ({
+                        ...draft,
+                        name: event.target.value,
+                      }))
+                    }
+                    placeholder="品名"
+                  />
+                  <input
+                    className="input input-bordered"
+                    value={menuDraft.price}
+                    onChange={(event) =>
+                      setMenuDraft((draft) => ({
+                        ...draft,
+                        price: event.target.value,
+                      }))
+                    }
+                    placeholder="價格"
+                  />
+                  <input
+                    className="input input-bordered"
+                    value={menuDraft.category}
+                    onChange={(event) =>
+                      setMenuDraft((draft) => ({
+                        ...draft,
+                        category: event.target.value,
+                      }))
+                    }
+                    placeholder="分類"
+                  />
+                  <textarea
+                    className="textarea textarea-bordered"
+                    value={menuDraft.description}
+                    onChange={(event) =>
+                      setMenuDraft((draft) => ({
+                        ...draft,
+                        description: event.target.value,
+                      }))
+                    }
+                    placeholder="描述"
+                  />
+                  <input
+                    className="input input-bordered"
+                    value={menuDraft.image_url}
+                    onChange={(event) =>
+                      setMenuDraft((draft) => ({
+                        ...draft,
+                        image_url: event.target.value,
+                      }))
+                    }
+                    placeholder="圖片網址"
+                  />
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => {
+                      void createMenuItem();
+                    }}
+                  >
+                    新增
+                  </button>
+                </div>
+              </div>
+              <div className="overflow-x-auto bg-base-100 rounded-lg shadow-sm">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>品項</th>
+                      <th>分類</th>
+                      <th>價格</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((item) => (
+                      <tr key={item.id}>
+                        <td>{item.name}</td>
+                        <td>{item.category}</td>
+                        <td>${item.price}</td>
+                        <td>
+                          <button
+                            className="btn btn-xs btn-error btn-outline"
+                            onClick={() => {
+                              void deleteMenuItem(item.id);
+                            }}
+                          >
+                            刪除
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        {isAdmin ? (
+          <section className="mb-10">
+            <h2 className="text-2xl font-bold mb-4">系統管理</h2>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <div className="bg-base-100 rounded-lg shadow-sm overflow-x-auto">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>申請人</th>
+                      <th>角色</th>
+                      <th>狀態</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {roleRequests.map((request) => (
+                      <tr key={request.id}>
+                        <td>
+                          <div className="font-medium">
+                            {request.userName ?? request.userId}
+                          </div>
+                          <div className="text-xs opacity-60">
+                            {request.reason}
+                          </div>
+                        </td>
+                        <td>{request.requestedRole}</td>
+                        <td>{request.status}</td>
+                        <td>
+                          {request.status === "pending" ? (
+                            <div className="flex gap-2">
+                              <button
+                                className="btn btn-xs btn-success"
+                                onClick={() => {
+                                  void reviewRoleRequest(
+                                    request.id,
+                                    "approved",
+                                  );
+                                }}
+                              >
+                                通過
+                              </button>
+                              <button
+                                className="btn btn-xs btn-error btn-outline"
+                                onClick={() => {
+                                  void reviewRoleRequest(
+                                    request.id,
+                                    "rejected",
+                                  );
+                                }}
+                              >
+                                拒絕
+                              </button>
+                            </div>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="bg-base-100 rounded-lg shadow-sm overflow-x-auto">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>使用者</th>
+                      <th>角色</th>
+                      <th>調整</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adminUsers.map((adminUser) => (
+                      <tr key={adminUser.id}>
+                        <td>
+                          <div className="font-medium">{adminUser.name}</div>
+                          <div className="text-xs opacity-60">
+                            {adminUser.email}
+                          </div>
+                        </td>
+                        <td>{adminUser.roles.join(", ")}</td>
+                        <td>
+                          <div className="flex gap-2 flex-wrap">
+                            <select
+                              className="select select-bordered select-xs"
+                              value={
+                                selectedRoleByUserId[adminUser.id] ??
+                                "customer"
+                              }
+                              onChange={(event) => {
+                                setSelectedRoleByUserId((current) => ({
+                                  ...current,
+                                  [adminUser.id]: event.target.value as Role,
+                                }));
+                              }}
+                            >
+                              <option value="customer">customer</option>
+                              <option value="staff">staff</option>
+                              <option value="chef">chef</option>
+                              <option value="owner">owner</option>
+                              <option value="admin">admin</option>
+                            </select>
+                            <button
+                              className="btn btn-xs"
+                              onClick={() => {
+                                void setUserRoles(adminUser, "add");
+                              }}
+                            >
+                              加入
+                            </button>
+                            <button
+                              className="btn btn-xs btn-outline"
+                              onClick={() => {
+                                void setUserRoles(adminUser, "reset");
+                              }}
+                            >
+                              重設
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
         ) : null}
 
         {items.length === 0 ? (

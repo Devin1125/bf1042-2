@@ -1,5 +1,10 @@
 import { mkdir, rename } from "node:fs/promises";
-import type { MenuItem, Order, OrderItem } from "../../shared/contracts.ts";
+import type {
+  MenuItem,
+  Order,
+  OrderItem,
+  OrderStatus,
+} from "../../shared/contracts.ts";
 import type { Store } from "../Store.ts";
 
 interface StoredUser {
@@ -171,9 +176,8 @@ export class JsonFileStore implements Store {
             ...orderItem,
             item: normalizeMenuItem(orderItem.item),
           })),
-          status: order.status === "submitted" ? "submitted" : "pending",
-          submittedAt:
-            order.status === "submitted" ? order.submittedAt : undefined,
+          status: normalizeOrderStatus(order.status),
+          submittedAt: order.status === "pending" ? undefined : order.submittedAt,
         })),
         userIdCounter: parsed.userIdCounter ?? 0,
         menuIdCounter: parsed.menuIdCounter ?? 0,
@@ -255,6 +259,10 @@ export class JsonFileStore implements Store {
     return this.orders;
   }
 
+  getOrdersByUserId(userId: string): ReadonlyArray<Order> {
+    return this.orders.filter((order) => order.userId === userId);
+  }
+
   getCurrentOrderByUserId(userId: string): Order | undefined {
     const pendingOrders = this.orders.filter(
       (order) => order.userId === userId && order.status === "pending",
@@ -272,9 +280,7 @@ export class JsonFileStore implements Store {
 
   getOrderHistoryByUserId(userId: string): ReadonlyArray<Order> {
     return this.orders
-      .filter(
-        (order) => order.userId === userId && order.status === "submitted",
-      )
+      .filter((order) => order.userId === userId && order.status !== "pending")
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
@@ -358,6 +364,31 @@ export class JsonFileStore implements Store {
     order.total = calculateOrderTotal(order.items);
     await this.persist();
 
+    return { ok: true, order };
+  }
+
+  async updateOrderStatus(
+    orderId: number,
+    status: Exclude<OrderStatus, "pending">,
+  ): Promise<
+    | { ok: true; order: Order }
+    | { ok: false; code: "ORDER_NOT_FOUND" | "INVALID_STATUS_TRANSITION" }
+  > {
+    const order = this.orders.find((targetOrder) => targetOrder.id === orderId);
+    if (!order) {
+      return { ok: false, code: "ORDER_NOT_FOUND" };
+    }
+
+    if (order.status === "pending") {
+      return { ok: false, code: "INVALID_STATUS_TRANSITION" };
+    }
+
+    order.status = status;
+    order.submittedAt =
+      order.submittedAt ??
+      (status === "submitted" ? new Date().toISOString() : undefined);
+
+    await this.persist();
     return { ok: true, order };
   }
 
@@ -461,4 +492,18 @@ export class JsonFileStore implements Store {
 
     await this.persistQueue;
   }
+}
+
+function normalizeOrderStatus(status: unknown): OrderStatus {
+  if (
+    status === "submitted" ||
+    status === "preparing" ||
+    status === "ready" ||
+    status === "completed" ||
+    status === "cancelled"
+  ) {
+    return status;
+  }
+
+  return "pending";
 }

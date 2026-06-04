@@ -1,0 +1,62 @@
+@baseUrl = http://localhost:3000
+
+### Public menu
+GET {{baseUrl}}/api/menu
+
+### Current session
+GET {{baseUrl}}/api/auth/get-session
+
+### Customer creates a role request
+POST {{baseUrl}}/api/users/me/role-request
+Content-Type: application/json
+
+{
+  "requestedRole": "staff",
+  "reason": "I need staff access to help customers manage breakfast orders."
+}
+
+### Orders list is role-filtered
+GET {{baseUrl}}/api/orders
+
+### Owner/admin creates a menu item
+POST {{baseUrl}}/api/menu
+Content-Type: application/json
+
+{
+  "name": "黑胡椒鐵板麵",
+  "price": 65,
+  "category": "鐵板麵",
+  "description": "附蛋的熱炒黑胡椒鐵板麵。",
+  "image_url": "https://images.unsplash.com/photo-1555126634-323283e090fa?auto=format&fit=crop&w=800&q=80"
+}
+
+### Chef/owner/admin updates kitchen status
+PATCH {{baseUrl}}/api/orders/1/status
+Content-Type: application/json
+
+{
+  "status": "preparing"
+}
+
+### Admin lists role requests
+GET {{baseUrl}}/api/admin/role-requests?status=all
+
+### Admin approves a role request
+PATCH {{baseUrl}}/api/admin/role-requests/1
+Content-Type: application/json
+
+{
+  "status": "approved",
+  "reviewNote": "Approved for class demo."
+}
+
+### Admin lists users
+GET {{baseUrl}}/api/admin/users
+
+### Admin sets user roles
+PATCH {{baseUrl}}/api/admin/users/USER_ID_HERE/roles
+Content-Type: application/json
+
+{
+  "roles": ["customer", "staff"]
+}

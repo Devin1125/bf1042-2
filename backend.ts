@@ -1,28 +1,46 @@
 import { Elysia } from "elysia";
 import { openapi } from "@elysiajs/openapi";
 import { cors } from "@elysia/cors";
+import { and, desc, eq } from "drizzle-orm";
 import { existsSync } from "node:fs";
 import toTaipeiDateTime from "./util.ts";
 import {
+  adminUserListResponseSchema,
+  adminUserResponseSchema,
   apiErrorResponseSchema,
   createMenuItemBodySchema,
+  createRoleRequestBodySchema,
   deleteMenuItemParamsSchema,
   getOrderByIdParamsSchema,
   healthResponseSchema,
+  listRoleRequestsQuerySchema,
   menuItemResponseSchema,
   menuListResponseSchema,
   nullableOrderResponseEnvelopeSchema,
   orderListResponseSchema,
   orderResponseEnvelopeSchema,
+  reviewRoleRequestBodySchema,
+  reviewRoleRequestParamsSchema,
+  roleRequestListResponseSchema,
+  roleRequestResponseSchema,
+  setUserRolesBodySchema,
+  setUserRolesParamsSchema,
   submitOrderParamsSchema,
   toOrderResponse,
   updateMenuItemBodySchema,
   updateMenuItemParamsSchema,
   updateOrderBodySchema,
   updateOrderParamsSchema,
+  updateOrderStatusBodySchema,
+  updateOrderStatusParamsSchema,
 } from "./shared/route-schemas.ts";
 import { createStore } from "./store/index.ts";
 import { auth, getCurrentUser } from "./auth/better-auth.ts";
+import { canAccessResource, hasAnyRole, requireAnyRole, requireRole } from "./shared/guards.ts";
+import type { AdminUser, Role, RoleRequest } from "./shared/contracts.ts";
+import { db } from "./db/client.ts";
+import { user as userTable } from "./db/auth-schema.ts";
+import { roleRequestsTable } from "./db/schema.ts";
 
 // 從環境變量獲取配置
 const port = parseInt(process.env.PORT || "3000", 10);
@@ -43,6 +61,56 @@ async function requireUser(request: Request) {
     });
   }
   return user;
+}
+
+const staffOrderRoles: Role[] = ["staff", "chef", "owner", "admin"];
+const menuManagerRoles: Role[] = ["owner", "admin"];
+const kitchenRoles: Role[] = ["chef", "owner", "admin"];
+
+function toIso(value: Date | string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function mapRoleRequest(
+  row: typeof roleRequestsTable.$inferSelect,
+  requestUser?: Pick<typeof userTable.$inferSelect, "email" | "name"> | null,
+): RoleRequest {
+  return {
+    id: row.id,
+    userId: row.userId,
+    userEmail: requestUser?.email,
+    userName: requestUser?.name,
+    requestedRole: row.requestedRole === "chef" ? "chef" : "staff",
+    reason: row.reason,
+    status:
+      row.status === "approved" || row.status === "rejected"
+        ? row.status
+        : "pending",
+    requestedAt: toIso(row.requestedAt) ?? new Date().toISOString(),
+    reviewedBy: row.reviewedBy ?? undefined,
+    reviewedAt: toIso(row.reviewedAt),
+    reviewNote: row.reviewNote ?? undefined,
+  };
+}
+
+function mapAdminUser(row: typeof userTable.$inferSelect): AdminUser {
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    roles: normalizeRoles(row.roles),
+    emailVerified: row.emailVerified,
+    createdAt: toIso(row.createdAt),
+  };
+}
+
+function normalizeRoles(rawRoles: unknown): Role[] {
+  const valid = new Set<Role>(["customer", "staff", "chef", "owner", "admin"]);
+  const roles = Array.isArray(rawRoles)
+    ? rawRoles.filter((role): role is Role => valid.has(role as Role))
+    : [];
+  return roles.length > 0 ? roles : ["customer"];
 }
 
 const app = new Elysia();
@@ -85,6 +153,8 @@ app.use(
         { name: "auth", description: "Authentication endpoints" },
         { name: "menu", description: "Menu management endpoints" },
         { name: "orders", description: "Order query and mutation endpoints" },
+        { name: "users", description: "Current user role request endpoints" },
+        { name: "admin", description: "RBAC administration endpoints" },
         { name: "system", description: "System and health check endpoints" },
       ],
     },
@@ -150,7 +220,9 @@ app.get("/api/menu", () => ({ data: [...store.getMenu()] }), {
 
 app.post(
   "/api/menu",
-  async ({ body, set }) => {
+  async ({ body, request, set }) => {
+    const user = await requireUser(request);
+    requireAnyRole(user, menuManagerRoles);
     const newMenuItem = await store.createMenuItem(body);
     set.status = 201;
     return { data: newMenuItem };
@@ -160,17 +232,21 @@ app.post(
     detail: {
       tags: ["menu"],
       summary: "Create a menu item",
-      description: "Add a new menu item into the breakfast menu.",
+      description: "Add a new menu item into the breakfast menu. Requires owner/admin.",
     },
     response: {
       201: menuItemResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
     },
   },
 );
 
 app.patch(
   "/api/menu/:id",
-  async ({ params, body, set }) => {
+  async ({ params, body, request, set }) => {
+    const user = await requireUser(request);
+    requireAnyRole(user, menuManagerRoles);
     const menuId = parseInt(params.id);
     const menuItem = await store.updateMenuItem(menuId, body);
 
@@ -187,10 +263,12 @@ app.patch(
     detail: {
       tags: ["menu"],
       summary: "Update a menu item",
-      description: "Update fields of an existing menu item.",
+      description: "Update fields of an existing menu item. Requires owner/admin.",
     },
     response: {
       200: menuItemResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
       404: apiErrorResponseSchema,
     },
   },
@@ -198,7 +276,9 @@ app.patch(
 
 app.delete(
   "/api/menu/:id",
-  async ({ params, set }) => {
+  async ({ params, request, set }) => {
+    const user = await requireUser(request);
+    requireAnyRole(user, menuManagerRoles);
     const menuId = parseInt(params.id);
     const removedMenuItem = await store.deleteMenuItem(menuId);
 
@@ -214,10 +294,12 @@ app.delete(
     detail: {
       tags: ["menu"],
       summary: "Delete a menu item",
-      description: "Remove a menu item by id.",
+      description: "Remove a menu item by id. Requires owner/admin.",
     },
     response: {
       200: menuItemResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
       404: apiErrorResponseSchema,
     },
   },
@@ -226,17 +308,26 @@ app.delete(
 // 訂單列表路由
 app.get(
   "/api/orders",
-  () => ({
-    data: store.getOrders().map(toOrderResponse),
-  }),
+  async ({ request }) => {
+    const user = await requireUser(request);
+    const orders = hasAnyRole(user, staffOrderRoles)
+      ? store.getOrders()
+      : store.getOrdersByUserId(user.id);
+
+    return {
+      data: orders.map(toOrderResponse),
+    };
+  },
   {
     detail: {
       tags: ["orders"],
-      summary: "List all orders",
-      description: "Return all orders stored in the demo backend.",
+      summary: "List orders by role",
+      description:
+        "Customers see only their orders. Staff, chef, owner and admin see all orders.",
     },
     response: {
       200: orderListResponseSchema,
+      401: apiErrorResponseSchema,
     },
   },
 );
@@ -327,7 +418,7 @@ app.get(
       return { error: "Order not found" };
     }
 
-    if (order.userId !== user.id) {
+    if (!canAccessResource(user, order.userId, staffOrderRoles)) {
       set.status = 403;
       return { error: "Forbidden" };
     }
@@ -344,6 +435,287 @@ app.get(
     },
     response: {
       200: orderResponseEnvelopeSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+      404: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.patch(
+  "/api/orders/:id/status",
+  async ({ params, body, request, set }) => {
+    const user = await requireUser(request);
+    requireAnyRole(user, kitchenRoles);
+
+    const orderId = parseInt(params.id, 10);
+    const result = await store.updateOrderStatus(orderId, body.status);
+
+    if (!result.ok && result.code === "ORDER_NOT_FOUND") {
+      set.status = 404;
+      return { error: "Order not found" };
+    }
+
+    if (!result.ok && result.code === "INVALID_STATUS_TRANSITION") {
+      set.status = 409;
+      return { error: "Pending cart orders cannot be moved through kitchen statuses" };
+    }
+
+    if (!result.ok) {
+      set.status = 500;
+      return { error: "Unexpected store state" };
+    }
+
+    return { data: toOrderResponse(result.order) };
+  },
+  {
+    params: updateOrderStatusParamsSchema,
+    body: updateOrderStatusBodySchema,
+    detail: {
+      tags: ["orders"],
+      summary: "Update kitchen order status",
+      description:
+        "Move submitted orders through preparing, ready, completed or cancelled. Requires chef/owner/admin.",
+    },
+    response: {
+      200: orderResponseEnvelopeSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+      404: apiErrorResponseSchema,
+      409: apiErrorResponseSchema,
+      500: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.post(
+  "/api/users/me/role-request",
+  async ({ body, request, set }) => {
+    const user = await requireUser(request);
+    const existingRequests = await db
+      .select()
+      .from(roleRequestsTable)
+      .where(
+        and(
+          eq(roleRequestsTable.userId, user.id),
+          eq(roleRequestsTable.status, "pending"),
+        ),
+      )
+      .limit(1);
+
+    if (existingRequests.length > 0) {
+      set.status = 400;
+      return { error: "You already have a pending role request" };
+    }
+
+    const [inserted] = await db
+      .insert(roleRequestsTable)
+      .values({
+        userId: user.id,
+        requestedRole: body.requestedRole,
+        reason: body.reason,
+        requestedAt: new Date(),
+      })
+      .returning();
+
+    if (!inserted) {
+      set.status = 500;
+      return { error: "Failed to create role request" };
+    }
+
+    set.status = 201;
+    return { data: mapRoleRequest(inserted, user) };
+  },
+  {
+    body: createRoleRequestBodySchema,
+    detail: {
+      tags: ["users"],
+      summary: "Request staff or chef role",
+      description: "Create one pending role upgrade request for the current user.",
+    },
+    response: {
+      201: roleRequestResponseSchema,
+      400: apiErrorResponseSchema,
+      401: apiErrorResponseSchema,
+      500: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.get(
+  "/api/admin/users",
+  async ({ request }) => {
+    const user = await requireUser(request);
+    requireRole(user, "admin");
+
+    const users = await db
+      .select()
+      .from(userTable)
+      .orderBy(desc(userTable.createdAt));
+
+    return { data: users.map(mapAdminUser) };
+  },
+  {
+    detail: {
+      tags: ["admin"],
+      summary: "List users",
+      description: "List users and roles. Requires admin.",
+    },
+    response: {
+      200: adminUserListResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.get(
+  "/api/admin/role-requests",
+  async ({ query, request }) => {
+    const user = await requireUser(request);
+    requireRole(user, "admin");
+
+    const status = query.status ?? "pending";
+    const rows = await db
+      .select({
+        request: roleRequestsTable,
+        requestUser: userTable,
+      })
+      .from(roleRequestsTable)
+      .leftJoin(userTable, eq(roleRequestsTable.userId, userTable.id))
+      .where(
+        status !== "all" ? eq(roleRequestsTable.status, status) : undefined,
+      )
+      .orderBy(desc(roleRequestsTable.requestedAt));
+
+    return {
+      data: rows.map((row) => mapRoleRequest(row.request, row.requestUser)),
+    };
+  },
+  {
+    query: listRoleRequestsQuerySchema,
+    detail: {
+      tags: ["admin"],
+      summary: "List role requests",
+      description: "List role upgrade requests. Requires admin.",
+    },
+    response: {
+      200: roleRequestListResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.patch(
+  "/api/admin/role-requests/:id",
+  async ({ params, body, request, set }) => {
+    const reviewer = await requireUser(request);
+    requireRole(reviewer, "admin");
+
+    const requestId = parseInt(params.id, 10);
+    const [existingRequest] = await db
+      .select()
+      .from(roleRequestsTable)
+      .where(eq(roleRequestsTable.id, requestId))
+      .limit(1);
+
+    if (!existingRequest) {
+      set.status = 404;
+      return { error: "Role request not found" };
+    }
+
+    if (existingRequest.status !== "pending") {
+      set.status = 400;
+      return { error: "This request has already been reviewed" };
+    }
+
+    const [updatedRequest] = await db
+      .update(roleRequestsTable)
+      .set({
+        status: body.status,
+        reviewedBy: reviewer.id,
+        reviewedAt: new Date(),
+        reviewNote: body.reviewNote,
+      })
+      .where(eq(roleRequestsTable.id, requestId))
+      .returning();
+
+    if (!updatedRequest) {
+      set.status = 500;
+      return { error: "Failed to update role request" };
+    }
+
+    if (body.status === "approved") {
+      const [targetUser] = await db
+        .select()
+        .from(userTable)
+        .where(eq(userTable.id, existingRequest.userId))
+        .limit(1);
+
+      if (targetUser) {
+        const nextRoles = Array.from(
+          new Set([...normalizeRoles(targetUser.roles), existingRequest.requestedRole]),
+        );
+
+        await db
+          .update(userTable)
+          .set({ roles: nextRoles, updatedAt: new Date() })
+          .where(eq(userTable.id, existingRequest.userId));
+      }
+    }
+
+    return { data: mapRoleRequest(updatedRequest) };
+  },
+  {
+    params: reviewRoleRequestParamsSchema,
+    body: reviewRoleRequestBodySchema,
+    detail: {
+      tags: ["admin"],
+      summary: "Review role request",
+      description: "Approve or reject a pending role request. Requires admin.",
+    },
+    response: {
+      200: roleRequestResponseSchema,
+      400: apiErrorResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+      404: apiErrorResponseSchema,
+      500: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.patch(
+  "/api/admin/users/:userId/roles",
+  async ({ params, body, request, set }) => {
+    const actor = await requireUser(request);
+    requireRole(actor, "admin");
+
+    const nextRoles = Array.from(new Set(body.roles));
+    const [updatedUser] = await db
+      .update(userTable)
+      .set({ roles: nextRoles, updatedAt: new Date() })
+      .where(eq(userTable.id, params.userId))
+      .returning();
+
+    if (!updatedUser) {
+      set.status = 404;
+      return { error: "User not found" };
+    }
+
+    return { data: mapAdminUser(updatedUser) };
+  },
+  {
+    params: setUserRolesParamsSchema,
+    body: setUserRolesBodySchema,
+    detail: {
+      tags: ["admin"],
+      summary: "Set user roles",
+      description: "Directly assign roles to a user. Requires admin.",
+    },
+    response: {
+      200: adminUserResponseSchema,
       401: apiErrorResponseSchema,
       403: apiErrorResponseSchema,
       404: apiErrorResponseSchema,
@@ -502,6 +874,10 @@ if (hasPublicAssets) {
 
 // 全域錯誤處理
 app.onError(({ error, set, code }) => {
+  if (error instanceof Response) {
+    return error;
+  }
+
   if (code === "VALIDATION") {
     set.status = 400;
     return {

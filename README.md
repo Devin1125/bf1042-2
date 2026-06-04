@@ -11,6 +11,7 @@
 - 🔧 後端：Elysia v1.4+ (TypeScript) + Drizzle ORM
 - ⚛️ 前端：React 19 + Vite + DaisyUI
 - 🔐 認證：Better Auth v1.6+ (Google OAuth only)
+- 🛡️ 權限：V10 RBAC（customer / staff / chef / owner / admin）
 - 🗄️ 資料庫：PostgreSQL (Neon Serverless)
 - 📋 API 規格：OpenAPI 3.0 (自動生成 Swagger UI)
 - 🎯 架構模式：三層架構 (contracts → route-schemas → backend)
@@ -21,8 +22,46 @@
 - ✅ 前後端型別安全共享
 - ✅ Google OAuth 登入（無密碼管理）
 - ✅ Session-based 認證（HttpOnly cookies）
+- ✅ RBAC 角色權限、角色申請審核、使用者角色管理
+- ✅ 店員/廚師營運工作台、訂單狀態追蹤、營收摘要
 - ✅ 完整的訂單流程（購物車 → 送出 → 歷史記錄）
 - ✅ 部署整合模式（單一 Node 運行）
+
+## V10 RBAC 權限系統
+
+| 角色 | 權限 |
+| --- | --- |
+| `customer` | 查看菜單、建立購物車、送出訂單、查看自己的訂單 |
+| `staff` | 查看所有訂單與營運摘要 |
+| `chef` | 查看所有訂單，更新廚房狀態 |
+| `owner` | 管理菜單，查看營運摘要，更新訂單狀態 |
+| `admin` | 管理所有角色與角色申請 |
+
+| API | 權限 |
+| --- | --- |
+| `GET /api/orders` | 已登入；顧客只看自己的訂單，店員以上看全部 |
+| `POST /api/menu` | `owner` / `admin` |
+| `PATCH /api/menu/:id` | `owner` / `admin` |
+| `DELETE /api/menu/:id` | `owner` / `admin` |
+| `PATCH /api/orders/:id/status` | `chef` / `owner` / `admin` |
+| `POST /api/users/me/role-request` | 已登入 |
+| `GET /api/admin/role-requests` | `admin` |
+| `PATCH /api/admin/role-requests/:id` | `admin` |
+| `PATCH /api/admin/users/:userId/roles` | `admin` |
+
+建立第一個 admin：先用 Google 登入一次，再執行：
+
+```bash
+bun run admin:create your-email@example.com
+```
+
+套用 RBAC migration：
+
+```bash
+bun run db:migrate
+```
+
+REST 測試範例在 `test_rbac.rest`。
 
 ## 快速開始
 

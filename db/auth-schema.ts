@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { boolean, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 
 // ─── Auth Schema 設計原則 ─────────────────────────────────────────────────────
@@ -30,6 +31,10 @@ export const user = appSchema.table("user", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
+  roles: text("roles")
+    .array()
+    .notNull()
+    .default(sql`ARRAY['customer']::text[]`),
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 });

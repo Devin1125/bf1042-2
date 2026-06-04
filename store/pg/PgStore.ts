@@ -1,5 +1,10 @@
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import type { MenuItem, Order, OrderItem } from "../../shared/contracts.ts";
+import type {
+  MenuItem,
+  Order,
+  OrderItem,
+  OrderStatus,
+} from "../../shared/contracts.ts";
 import { db } from "../../db/client.ts";
 import {
   menuItemsTable,
@@ -155,6 +160,10 @@ export class PgStore implements Store {
     return this.orders;
   }
 
+  getOrdersByUserId(userId: string): ReadonlyArray<Order> {
+    return this.orders.filter((order) => order.userId === userId);
+  }
+
   getCurrentOrderByUserId(userId: string): Order | undefined {
     const pendingOrders = this.orders.filter(
       (o) => o.userId === userId && o.status === "pending",
@@ -170,7 +179,7 @@ export class PgStore implements Store {
 
   getOrderHistoryByUserId(userId: string): ReadonlyArray<Order> {
     return this.orders
-      .filter((o) => o.userId === userId && o.status === "submitted")
+      .filter((o) => o.userId === userId && o.status !== "pending")
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
@@ -319,6 +328,37 @@ export class PgStore implements Store {
     return { ok: true, order };
   }
 
+  async updateOrderStatus(
+    orderId: number,
+    status: Exclude<OrderStatus, "pending">,
+  ): Promise<
+    | { ok: true; order: Order }
+    | { ok: false; code: "ORDER_NOT_FOUND" | "INVALID_STATUS_TRANSITION" }
+  > {
+    const order = this.orders.find((o) => o.id === orderId);
+    if (!order) return { ok: false, code: "ORDER_NOT_FOUND" };
+    if (order.status === "pending") {
+      return { ok: false, code: "INVALID_STATUS_TRANSITION" };
+    }
+
+    const submittedAt =
+      order.submittedAt ??
+      (status === "submitted" ? new Date().toISOString() : undefined);
+
+    await db
+      .update(ordersTable)
+      .set({
+        status,
+        ...(submittedAt ? { submittedAt: new Date(submittedAt) } : {}),
+      })
+      .where(eq(ordersTable.id, orderId));
+
+    order.status = status;
+    if (submittedAt) order.submittedAt = submittedAt;
+
+    return { ok: true, order };
+  }
+
   // ── Private ─────────────────────────────────────────────────
 
   private async seedFromJsonIfEmpty(): Promise<void> {
@@ -405,7 +445,7 @@ export class PgStore implements Store {
       userId: row.userId,
       items: itemsByOrderId.get(row.id) ?? [],
       total: row.total,
-      status: row.status === "submitted" ? "submitted" : "pending",
+      status: normalizeOrderStatus(row.status),
       createdAt:
         row.createdAt instanceof Date
           ? row.createdAt.toISOString()
@@ -417,4 +457,18 @@ export class PgStore implements Store {
         : undefined,
     }));
   }
+}
+
+function normalizeOrderStatus(status: string): OrderStatus {
+  if (
+    status === "submitted" ||
+    status === "preparing" ||
+    status === "ready" ||
+    status === "completed" ||
+    status === "cancelled"
+  ) {
+    return status;
+  }
+
+  return "pending";
 }
