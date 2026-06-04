@@ -633,7 +633,8 @@ export default function App() {
     resetCartState();
   }
 
-  async function addToCart(item: MenuItem): Promise<void> {
+  async function setCartItemQty(item: MenuItem, qty: number): Promise<void> {
+    const nextQty = Math.max(0, Math.trunc(qty));
     setActionError("");
     setActiveItemId(item.id);
 
@@ -642,9 +643,13 @@ export default function App() {
         throw new Error("Please login first");
       }
 
+      if (orderId === null && nextQty === 0) {
+        return;
+      }
+
       const patchOrderItem = async (
         targetOrderId: number,
-        qty: number,
+        targetQty: number,
       ): Promise<Order> => {
         const response = await fetch(
           buildApiUrl(`/api/orders/${targetOrderId}`),
@@ -654,7 +659,7 @@ export default function App() {
             credentials: "include",
             body: JSON.stringify({
               itemId: item.id,
-              qty,
+              qty: targetQty,
             }),
           },
         );
@@ -674,8 +679,6 @@ export default function App() {
       };
 
       const targetOrderId = await ensureOrder();
-      const currentQty = cartQtyByItemId[item.id] ?? 0;
-      const nextQty = currentQty + 1;
 
       try {
         const updatedOrder = await patchOrderItem(targetOrderId, nextQty);
@@ -692,14 +695,13 @@ export default function App() {
           setOrderId(null);
 
           const recoveredOrder = await loadCurrentOrder();
-          const retryOrderId = recoveredOrder?.id ?? (await ensureOrder());
-          const recoveredQty =
-            recoveredOrder?.items.find(
-              (orderItem) => orderItem.item.id === item.id,
-            )?.qty ?? 0;
-          const retryQty = recoveredQty + 1;
+          if (!recoveredOrder && nextQty === 0) {
+            return;
+          }
 
-          const retriedOrder = await patchOrderItem(retryOrderId, retryQty);
+          const retryOrderId = recoveredOrder?.id ?? (await ensureOrder());
+
+          const retriedOrder = await patchOrderItem(retryOrderId, nextQty);
           syncCartFromOrder(retriedOrder);
           return;
         }
@@ -721,7 +723,10 @@ export default function App() {
             (orderItem) => orderItem.item.id === item.id,
           )?.qty;
 
-          if (typeof recoveredQty === "number" && recoveredQty > 0) {
+          if (
+            (nextQty === 0 && !recoveredQty) ||
+            (typeof recoveredQty === "number" && recoveredQty === nextQty)
+          ) {
             return;
           }
         } catch (recoveryError) {
@@ -729,11 +734,15 @@ export default function App() {
         }
       }
 
-      setActionError("加入預約單失敗，請稍後再試。");
+      setActionError("更新預約單數量失敗，請稍後再試。");
       console.error(cartError);
     } finally {
       setActiveItemId(null);
     }
+  }
+
+  async function addToCart(item: MenuItem): Promise<void> {
+    await setCartItemQty(item, (cartQtyByItemId[item.id] ?? 0) + 1);
   }
 
   async function clearCart(): Promise<void> {
@@ -1640,48 +1649,80 @@ export default function App() {
                 {category}
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {(grouped.groupedItems[category] || []).map((item) => (
-                  <div
-                    key={item.id}
-                    className="card bg-base-100 shadow-md hover:shadow-lg transition-shadow"
-                  >
-                    <figure className="h-44 overflow-hidden bg-base-300">
-                      <img
-                        src={item.image_url}
-                        alt={item.name}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                        onError={(event) => {
-                          const target = event.currentTarget;
-                          target.src =
-                            "https://images.unsplash.com/photo-1526318896980-cf78c088247c?auto=format&fit=crop&w=800&q=80";
-                        }}
-                      />
-                    </figure>
-                    <div className="card-body">
-                      <h3 className="card-title text-lg">{item.name}</h3>
-                      <p className="text-sm opacity-80 line-clamp-2 min-h-[2.75rem]">
-                        {item.description}
-                      </p>
-                      <div className="card-actions justify-between items-center">
-                        <span className="text-xl font-bold text-success">
-                          ${item.price}
-                        </span>
-                        <button
-                          className="btn btn-sm btn-primary"
-                          onClick={() => {
-                            void addToCart(item);
+                {(grouped.groupedItems[category] || []).map((item) => {
+                  const quantity = cartQtyByItemId[item.id] ?? 0;
+
+                  return (
+                    <div
+                      key={item.id}
+                      className="card bg-base-100 shadow-md hover:shadow-lg transition-shadow"
+                    >
+                      <figure className="h-44 overflow-hidden bg-base-300">
+                        <img
+                          src={item.image_url}
+                          alt={item.name}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                          onError={(event) => {
+                            const target = event.currentTarget;
+                            target.src =
+                              "https://images.unsplash.com/photo-1526318896980-cf78c088247c?auto=format&fit=crop&w=800&q=80";
                           }}
-                          disabled={activeItemId === item.id}
-                        >
-                          {activeItemId === item.id
-                            ? "加入中..."
-                            : `加入預約單${cartQtyByItemId[item.id] ? ` (${cartQtyByItemId[item.id]})` : ""}`}
-                        </button>
+                        />
+                      </figure>
+                      <div className="card-body">
+                        <h3 className="card-title text-lg">{item.name}</h3>
+                        <p className="text-sm opacity-80 line-clamp-2 min-h-[2.75rem]">
+                          {item.description}
+                        </p>
+                        <div className="card-actions justify-between items-center gap-3">
+                          <span className="text-xl font-bold text-success">
+                            ${item.price}
+                          </span>
+                          {quantity > 0 ? (
+                            <div className="join">
+                              <button
+                                className="btn btn-sm join-item"
+                                onClick={() => {
+                                  void setCartItemQty(item, quantity - 1);
+                                }}
+                                disabled={activeItemId === item.id}
+                                aria-label={`減少 ${item.name} 數量`}
+                              >
+                                -
+                              </button>
+                              <span className="btn btn-sm join-item no-animation pointer-events-none min-w-12">
+                                {activeItemId === item.id ? "..." : quantity}
+                              </span>
+                              <button
+                                className="btn btn-sm btn-primary join-item"
+                                onClick={() => {
+                                  void setCartItemQty(item, quantity + 1);
+                                }}
+                                disabled={activeItemId === item.id}
+                                aria-label={`增加 ${item.name} 數量`}
+                              >
+                                +
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              className="btn btn-sm btn-primary"
+                              onClick={() => {
+                                void addToCart(item);
+                              }}
+                              disabled={activeItemId === item.id}
+                            >
+                              {activeItemId === item.id
+                                ? "加入中..."
+                                : "加入預約單"}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))
@@ -1770,15 +1811,44 @@ export default function App() {
                   {cartDetails.map((detail) => (
                     <li
                       key={detail.itemId}
-                      className="p-3 rounded-lg bg-base-200 flex items-center justify-between"
+                      className="p-3 rounded-lg bg-base-200 flex items-center justify-between gap-3"
                     >
-                      <div>
+                      <div className="min-w-0">
                         <p className="font-semibold">{detail.item.name}</p>
                         <p className="text-sm opacity-70">
                           單價 ${detail.item.price} x {detail.qty}
                         </p>
                       </div>
-                      <p className="font-bold">${detail.subtotal}</p>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <div className="join">
+                          <button
+                            className="btn btn-xs join-item"
+                            onClick={() => {
+                              void setCartItemQty(detail.item, detail.qty - 1);
+                            }}
+                            disabled={activeItemId === detail.itemId}
+                            aria-label={`減少 ${detail.item.name} 數量`}
+                          >
+                            -
+                          </button>
+                          <span className="btn btn-xs join-item no-animation pointer-events-none min-w-10">
+                            {activeItemId === detail.itemId ? "..." : detail.qty}
+                          </span>
+                          <button
+                            className="btn btn-xs btn-primary join-item"
+                            onClick={() => {
+                              void setCartItemQty(detail.item, detail.qty + 1);
+                            }}
+                            disabled={activeItemId === detail.itemId}
+                            aria-label={`增加 ${detail.item.name} 數量`}
+                          >
+                            +
+                          </button>
+                        </div>
+                        <p className="font-bold min-w-16 text-right">
+                          ${detail.subtotal}
+                        </p>
+                      </div>
                     </li>
                   ))}
                 </ul>

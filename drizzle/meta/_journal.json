@@ -36,6 +36,13 @@
       "when": 1780556077229,
       "tag": "0004_reservation_orders",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1780556077230,
+      "tag": "0005_breakfast_buffet_menu_item",
+      "breakpoints": true
     }
   ]
 }

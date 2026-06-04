@@ -60,6 +60,15 @@ const defaultMenu: MenuItem[] = [
     description: "煎到微酥的蛋餅皮包裹煙燻培根與雞蛋，是經典台式早餐選擇。",
     image_url: "/imgs/menu/bacon-egg-roll.webp",
   },
+  {
+    id: 5,
+    name: "早餐吃到飽",
+    price: 500,
+    category: "方案",
+    description: "預約時段內可享店內早餐吃到飽，適合想一次吃齊多種餐點的顧客。",
+    image_url:
+      "https://images.unsplash.com/photo-1533089860892-a7c6f0a88666?auto=format&fit=crop&w=800&q=80",
+  },
 ];
 
 function cloneDefaultMenu(): MenuItem[] {
