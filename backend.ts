@@ -51,6 +51,14 @@ const allowedOrigin = process.env.API_ALLOWED_ORIGIN || "*";
 const store = createStore({ dataFilePath: "./data/store.json" });
 const hasPublicAssets =
   existsSync("./public") && existsSync("./public/index.html");
+const businessOpenHour = 6;
+const businessCloseHour = 10;
+const taipeiHourMinuteFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "Asia/Taipei",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
 
 // ─── Auth Helper ──────────────────────────────────────────────────────────────
 // 簡化的 helper 函數，用於保護路由並獲取 user，失敗時拋出 401 錯誤
@@ -72,6 +80,21 @@ const kitchenRoles: Role[] = ["chef", "owner", "admin"];
 function toIso(value: Date | string | null | undefined): string | undefined {
   if (!value) return undefined;
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function isWithinBusinessHoursTaipei(date: Date): boolean {
+  const parts = taipeiHourMinuteFormatter.formatToParts(date);
+  const hourText = parts.find((part) => part.type === "hour")?.value ?? "0";
+  const minuteText = parts.find((part) => part.type === "minute")?.value ?? "0";
+  const hour = Number.parseInt(hourText, 10);
+  const minute = Number.parseInt(minuteText, 10);
+  const normalizedHour = hour === 24 ? 0 : hour;
+  const minutes = normalizedHour * 60 + minute;
+
+  return (
+    minutes >= businessOpenHour * 60 &&
+    minutes <= businessCloseHour * 60
+  );
 }
 
 function mapRoleRequest(
@@ -821,6 +844,11 @@ app.post(
     if (pickupDate.getTime() < Date.now() - 60_000) {
       set.status = 400;
       return { error: "Pickup time cannot be in the past" };
+    }
+
+    if (!isWithinBusinessHoursTaipei(pickupDate)) {
+      set.status = 400;
+      return { error: "Pickup time must be between 06:00 and 10:00 Asia/Taipei" };
     }
 
     const result = await store.submitOrder(orderId, {

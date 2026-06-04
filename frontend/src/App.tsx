@@ -13,12 +13,14 @@ import type {
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 const reservationLeadTimeMinutes = 30;
+const businessOpenHour = 6;
+const businessCloseHour = 10;
 const reservationPresetOptions = [
+  { label: "開店", hour: 6, minute: 0 },
+  { label: "早餐", hour: 7, minute: 0 },
   { label: "早餐", hour: 8, minute: 0 },
-  { label: "上午", hour: 10, minute: 0 },
-  { label: "午餐", hour: 12, minute: 0 },
-  { label: "午餐", hour: 12, minute: 30 },
-  { label: "下午", hour: 15, minute: 0 },
+  { label: "早餐", hour: 9, minute: 0 },
+  { label: "最後取餐", hour: 10, minute: 0 },
 ];
 
 function buildApiUrl(path: string) {
@@ -38,20 +40,44 @@ function toDateTimeLocalInputValue(date: Date): string {
 }
 
 function getDefaultPickupAtInputValue(): string {
-  const pickupAt = new Date(Date.now() + reservationLeadTimeMinutes * 60_000);
-  pickupAt.setSeconds(0, 0);
-  return toDateTimeLocalInputValue(pickupAt);
+  const earliestPickupAt = new Date(
+    Date.now() + reservationLeadTimeMinutes * 60_000,
+  );
+  const openingAt = new Date(earliestPickupAt);
+  openingAt.setHours(businessOpenHour, 0, 0, 0);
+  const closingAt = new Date(earliestPickupAt);
+  closingAt.setHours(businessCloseHour, 0, 0, 0);
+
+  if (earliestPickupAt.getTime() < openingAt.getTime()) {
+    return toDateTimeLocalInputValue(openingAt);
+  }
+
+  if (earliestPickupAt.getTime() <= closingAt.getTime()) {
+    earliestPickupAt.setSeconds(0, 0);
+    return toDateTimeLocalInputValue(earliestPickupAt);
+  }
+
+  openingAt.setDate(openingAt.getDate() + 1);
+  return toDateTimeLocalInputValue(openingAt);
 }
 
 function getNextReservationSlot(hour: number, minute: number): Date {
   const slot = new Date();
   slot.setHours(hour, minute, 0, 0);
 
-  if (slot.getTime() < Date.now() + 60_000) {
+  if (slot.getTime() < Date.now() + reservationLeadTimeMinutes * 60_000) {
     slot.setDate(slot.getDate() + 1);
   }
 
   return slot;
+}
+
+function isWithinBusinessHours(date: Date): boolean {
+  const minutes = date.getHours() * 60 + date.getMinutes();
+  return (
+    minutes >= businessOpenHour * 60 &&
+    minutes <= businessCloseHour * 60
+  );
 }
 
 function isSameCalendarDate(left: Date, right: Date): boolean {
@@ -734,7 +760,7 @@ export default function App() {
         }
       }
 
-      setActionError("更新預約單數量失敗，請稍後再試。");
+      setActionError("更新購物車數量失敗，請稍後再試。");
       console.error(cartError);
     } finally {
       setActiveItemId(null);
@@ -773,7 +799,7 @@ export default function App() {
       setCartQtyByItemId({});
       setCartTotal(0);
     } catch (clearError) {
-      setActionError("清空預約單失敗，請稍後再試。");
+      setActionError("清空購物車失敗，請稍後再試。");
       console.error(clearError);
     } finally {
       setIsClearingCart(false);
@@ -795,6 +821,11 @@ export default function App() {
 
     if (pickupDate.getTime() < Date.now() - 60_000) {
       setActionError("預約取餐時段不能早於現在。");
+      return;
+    }
+
+    if (!isWithinBusinessHours(pickupDate)) {
+      setActionError("店內營業時間為 06:00-10:00，請選擇營業時間內的取餐時段。");
       return;
     }
 
@@ -973,7 +1004,7 @@ export default function App() {
 
   function orderStatusLabel(status: OrderStatus): string {
     const labels: Record<OrderStatus, string> = {
-      pending: "預約單",
+      pending: "購物車",
       submitted: "待處理",
       preparing: "製作中",
       ready: "可取餐",
@@ -1028,7 +1059,7 @@ export default function App() {
             {isCustomerRoute ? (
               <>
                 <div className="badge badge-secondary">
-                  預約單 {cartItemCount} 件
+                  購物車 {cartItemCount} 件
                 </div>
                 <div className="badge badge-accent">總計 ${cartTotal}</div>
                 <div className="badge badge-outline">
@@ -1164,6 +1195,9 @@ export default function App() {
                       setReservationPickupAt(event.target.value);
                     }}
                   />
+                  <span className="label-text-alt mt-2 opacity-70">
+                    營業時間 06:00-10:00，最晚取餐 10:00。
+                  </span>
                 </label>
               </div>
               <div className="lg:w-[28rem]">
@@ -1394,7 +1428,7 @@ export default function App() {
                       <td colSpan={roleView === "chef" ? 5 : 6}>
                         {roleView === "chef"
                           ? "目前沒有需要製作的訂單。"
-                          : "目前沒有送出的預約單。"}
+                          : "目前沒有送出的購物車。"}
                       </td>
                     </tr>
                   ) : null}
@@ -1715,7 +1749,7 @@ export default function App() {
                             >
                               {activeItemId === item.id
                                 ? "加入中..."
-                                : "加入預約單"}
+                                : "加入購物車"}
                             </button>
                           )}
                         </div>
@@ -1804,7 +1838,7 @@ export default function App() {
             <div className="p-4 flex-1 overflow-auto">
               {cartDetails.length === 0 ? (
                 <div className="alert">
-                  <span>預約單目前是空的。</span>
+                  <span>購物車目前是空的。</span>
                 </div>
               ) : (
                 <ul className="space-y-3">
@@ -1870,6 +1904,9 @@ export default function App() {
                   }}
                   disabled={cartDetails.length === 0 || isSubmittingOrder}
                 />
+                <span className="label-text-alt mt-2 opacity-70">
+                  營業時間 06:00-10:00，最晚取餐 10:00。
+                </span>
                 <div className="grid grid-cols-2 gap-2 mt-3">
                   {reservationPresetSlots.map((slot) => (
                     <button
@@ -1920,7 +1957,7 @@ export default function App() {
                 }}
                 disabled={cartDetails.length === 0 || isClearingCart}
               >
-                {isClearingCart ? "清空中..." : "清空預約單"}
+                {isClearingCart ? "清空中..." : "清空購物車"}
               </button>
               <button
                 className="btn btn-primary w-full"
@@ -1933,7 +1970,7 @@ export default function App() {
                   !reservationPickupAt
                 }
               >
-                {isSubmittingOrder ? "送出中..." : "送出預約單"}
+                {isSubmittingOrder ? "送出中..." : "送出購物車"}
               </button>
             </div>
           </aside>
