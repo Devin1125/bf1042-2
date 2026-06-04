@@ -222,7 +222,12 @@ export class PgStore implements Store {
 
   async updateOrderItem(
     orderId: number,
-    input: { userId: string; itemId: number; qty: number },
+    input: {
+      userId: string;
+      itemId: number;
+      qty: number;
+      customization?: string;
+    },
   ): Promise<
     | { ok: true; order: Order }
     | {
@@ -247,6 +252,7 @@ export class PgStore implements Store {
     const existingIdx = order.items.findIndex(
       (oi) => oi.item.id === input.itemId,
     );
+    const normalizedCustomization = input.customization?.trim();
 
     if (existingIdx !== -1) {
       if (input.qty === 0) {
@@ -260,9 +266,20 @@ export class PgStore implements Store {
           );
         order.items.splice(existingIdx, 1);
       } else {
+        const updatePatch: {
+          qty: number;
+          customization?: string | null;
+        } = { qty: input.qty };
+        if (input.customization !== undefined) {
+          updatePatch.customization =
+            normalizedCustomization && normalizedCustomization.length > 0
+              ? normalizedCustomization
+              : null;
+        }
+
         await db
           .update(orderItemsTable)
-          .set({ qty: input.qty })
+          .set(updatePatch)
           .where(
             and(
               eq(orderItemsTable.orderId, orderId),
@@ -270,7 +287,15 @@ export class PgStore implements Store {
             ),
           );
         const target = order.items[existingIdx];
-        if (target) target.qty = input.qty;
+        if (target) {
+          target.qty = input.qty;
+          if (input.customization !== undefined) {
+            target.customization =
+              normalizedCustomization && normalizedCustomization.length > 0
+                ? normalizedCustomization
+                : undefined;
+          }
+        }
       }
     } else if (input.qty > 0) {
       await db.insert(orderItemsTable).values({
@@ -282,8 +307,19 @@ export class PgStore implements Store {
         description: menuItem.description,
         imageUrl: menuItem.image_url,
         qty: input.qty,
+        customization:
+          normalizedCustomization && normalizedCustomization.length > 0
+            ? normalizedCustomization
+            : null,
       });
-      order.items.push({ item: { ...menuItem }, qty: input.qty });
+      order.items.push({
+        item: { ...menuItem },
+        qty: input.qty,
+        customization:
+          normalizedCustomization && normalizedCustomization.length > 0
+            ? normalizedCustomization
+            : undefined,
+      });
     }
 
     order.total = calculateTotal(order.items);
@@ -446,6 +482,7 @@ export class PgStore implements Store {
           image_url: row.imageUrl,
         },
         qty: row.qty,
+        customization: row.customization ?? undefined,
       });
       itemsByOrderId.set(row.orderId, items);
     }

@@ -51,6 +51,7 @@ export interface Store {
       userId: string;
       itemId: number;
       qty: number;
+      customization?: string;
     },
   ): Promise<
     { ok: true; order: Order } | { ok: false; code: UpdateOrderItemErrorCode }

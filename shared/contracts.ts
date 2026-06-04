@@ -50,6 +50,7 @@ export const sessionUserSchema = userSchema.pick({
 export const orderItemSchema = z.object({
   item: menuItemSchema,
   qty: z.number().min(0),
+  customization: z.string().optional(),
 });
 
 export const orderSchema = z.object({

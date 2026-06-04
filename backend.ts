@@ -785,6 +785,9 @@ app.patch(
       userId: user.id,
       itemId: body.itemId,
       qty: body.qty,
+      ...(body.customization !== undefined
+        ? { customization: body.customization.trim() }
+        : {}),
     });
 
     if (!result.ok && result.code === "ORDER_NOT_FOUND") {
@@ -820,7 +823,8 @@ app.patch(
     detail: {
       tags: ["orders"],
       summary: "Update order item quantity",
-      description: "Set the quantity of a menu item within a pending order.",
+      description:
+        "Set the quantity and customization of a menu item within a pending order.",
     },
     response: {
       200: orderResponseEnvelopeSchema,

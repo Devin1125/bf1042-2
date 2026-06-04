@@ -77,6 +77,7 @@ export const orderItemsTable = appSchema.table(
     description: text("description").notNull(),
     imageUrl: text("image_url").notNull(),
     qty: integer("qty").notNull(),
+    customization: text("customization"),
   },
   (table) => ({
     orderItemUniqueIdx: uniqueIndex("order_items_order_item_idx").on(

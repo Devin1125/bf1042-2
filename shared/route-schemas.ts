@@ -87,6 +87,7 @@ export const updateOrderParamsSchema = z.object({
 export const updateOrderBodySchema = z.object({
   itemId: z.number().int().min(1),
   qty: z.number().min(0),
+  customization: z.string().max(200).optional(),
 });
 
 /** PATCH /api/orders/:id/status */

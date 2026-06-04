@@ -184,6 +184,11 @@ export class JsonFileStore implements Store {
           items: order.items.map((orderItem) => ({
             ...orderItem,
             item: normalizeMenuItem(orderItem.item),
+            customization:
+              typeof orderItem.customization === "string" &&
+              orderItem.customization.length > 0
+                ? orderItem.customization
+                : undefined,
           })),
           status: normalizeOrderStatus(order.status),
           submittedAt: order.status === "pending" ? undefined : order.submittedAt,
@@ -332,6 +337,7 @@ export class JsonFileStore implements Store {
       userId: string;
       itemId: number;
       qty: number;
+      customization?: string;
     },
   ): Promise<
     | { ok: true; order: Order }
@@ -365,6 +371,7 @@ export class JsonFileStore implements Store {
     const existingItemIndex = order.items.findIndex(
       (orderItem) => orderItem.item.id === input.itemId,
     );
+    const normalizedCustomization = input.customization?.trim();
 
     if (existingItemIndex !== -1) {
       const existingOrderItem = order.items[existingItemIndex];
@@ -373,9 +380,22 @@ export class JsonFileStore implements Store {
         order.items.splice(existingItemIndex, 1);
       } else if (existingOrderItem) {
         existingOrderItem.qty = input.qty;
+        if (input.customization !== undefined) {
+          existingOrderItem.customization =
+            normalizedCustomization && normalizedCustomization.length > 0
+              ? normalizedCustomization
+              : undefined;
+        }
       }
     } else if (input.qty > 0) {
-      order.items.push({ item: menuItem, qty: input.qty });
+      order.items.push({
+        item: menuItem,
+        qty: input.qty,
+        customization:
+          normalizedCustomization && normalizedCustomization.length > 0
+            ? normalizedCustomization
+            : undefined,
+      });
     }
 
     order.total = calculateOrderTotal(order.items);

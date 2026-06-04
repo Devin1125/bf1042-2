@@ -128,6 +128,13 @@ function formatOrderDateTime(isoString?: string): string {
   }).format(date);
 }
 
+function formatOrderItemText(detail: Order["items"][number]): string {
+  const customization = detail.customization?.trim();
+  return `${detail.item.name} x${detail.qty}${
+    customization ? `（${customization}）` : ""
+  }`;
+}
+
 export default function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [authError, setAuthError] = useState("");
@@ -140,6 +147,9 @@ export default function App() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [cartQtyByItemId, setCartQtyByItemId] = useState<
     Record<number, number>
+  >({});
+  const [cartCustomizationByItemId, setCartCustomizationByItemId] = useState<
+    Record<number, string>
   >({});
   const [cartTotal, setCartTotal] = useState(0);
   const [activeItemId, setActiveItemId] = useState<number | null>(null);
@@ -185,14 +195,26 @@ export default function App() {
       },
       {} as Record<number, number>,
     );
+    const nextCustomizationByItemId = order.items.reduce(
+      (acc, orderItem) => {
+        const customization = orderItem.customization?.trim();
+        if (customization) {
+          acc[orderItem.item.id] = customization;
+        }
+        return acc;
+      },
+      {} as Record<number, string>,
+    );
 
     setCartQtyByItemId(nextQtyByItemId);
+    setCartCustomizationByItemId(nextCustomizationByItemId);
     setCartTotal(order.total);
   }
 
   function resetCartState() {
     setOrderId(null);
     setCartQtyByItemId({});
+    setCartCustomizationByItemId({});
     setCartTotal(0);
     setIsCartOpen(false);
     setReservationPickupAt(getDefaultPickupAtInputValue());
@@ -400,11 +422,12 @@ export default function App() {
           itemId,
           qty,
           item,
+          customization: cartCustomizationByItemId[itemId] ?? "",
           subtotal: item.price * qty,
         };
       })
       .filter((entry) => entry !== null);
-  }, [cartQtyByItemId, items]);
+  }, [cartCustomizationByItemId, cartQtyByItemId, items]);
 
   const reservationPickupMin = useMemo(
     () => toDateTimeLocalInputValue(new Date()),
@@ -659,7 +682,11 @@ export default function App() {
     resetCartState();
   }
 
-  async function setCartItemQty(item: MenuItem, qty: number): Promise<void> {
+  async function setCartItemQty(
+    item: MenuItem,
+    qty: number,
+    customization?: string,
+  ): Promise<void> {
     const nextQty = Math.max(0, Math.trunc(qty));
     setActionError("");
     setActiveItemId(item.id);
@@ -677,16 +704,21 @@ export default function App() {
         targetOrderId: number,
         targetQty: number,
       ): Promise<Order> => {
+        const requestBody = {
+          itemId: item.id,
+          qty: targetQty,
+          ...(customization !== undefined
+            ? { customization: customization.trim() }
+            : {}),
+        };
+
         const response = await fetch(
           buildApiUrl(`/api/orders/${targetOrderId}`),
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             credentials: "include",
-            body: JSON.stringify({
-              itemId: item.id,
-              qty: targetQty,
-            }),
+            body: JSON.stringify(requestBody),
           },
         );
 
@@ -771,6 +803,22 @@ export default function App() {
     await setCartItemQty(item, (cartQtyByItemId[item.id] ?? 0) + 1);
   }
 
+  function updateCartItemCustomization(
+    itemId: number,
+    customization: string,
+  ): void {
+    const limitedCustomization = customization.slice(0, 200);
+    setCartCustomizationByItemId((current) => {
+      const next = { ...current };
+      if (limitedCustomization.length === 0) {
+        delete next[itemId];
+      } else {
+        next[itemId] = limitedCustomization;
+      }
+      return next;
+    });
+  }
+
   async function clearCart(): Promise<void> {
     if (!user || orderId === null || cartDetails.length === 0) {
       return;
@@ -797,6 +845,7 @@ export default function App() {
       }
 
       setCartQtyByItemId({});
+      setCartCustomizationByItemId({});
       setCartTotal(0);
     } catch (clearError) {
       setActionError("清空購物車失敗，請稍後再試。");
@@ -832,6 +881,25 @@ export default function App() {
     setIsSubmittingOrder(true);
 
     try {
+      for (const detail of cartDetails) {
+        const response = await fetch(buildApiUrl(`/api/orders/${orderId}`), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            itemId: detail.itemId,
+            qty: detail.qty,
+            customization: detail.customization.trim(),
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            `Save item customization failed: HTTP ${response.status}`,
+          );
+        }
+      }
+
       const response = await fetch(
         buildApiUrl(`/api/orders/${orderId}/submit`),
         {
@@ -1384,9 +1452,7 @@ export default function App() {
                       <td>
                         <div>
                           {order.items
-                            .map(
-                              (detail) => `${detail.item.name} x${detail.qty}`,
-                            )
+                            .map((detail) => formatOrderItemText(detail))
                             .join("、")}
                         </div>
                         {order.note ? (
@@ -1797,7 +1863,7 @@ export default function App() {
                       <ul className="text-sm list-disc pl-5 space-y-1">
                         {order.items.map((detail) => (
                           <li key={`${order.id}-${detail.item.id}`}>
-                            {detail.item.name} x {detail.qty}
+                            {formatOrderItemText(detail)}
                           </li>
                         ))}
                       </ul>
@@ -1845,44 +1911,78 @@ export default function App() {
                   {cartDetails.map((detail) => (
                     <li
                       key={detail.itemId}
-                      className="p-3 rounded-lg bg-base-200 flex items-center justify-between gap-3"
+                      className="p-3 rounded-lg bg-base-200 space-y-3"
                     >
-                      <div className="min-w-0">
-                        <p className="font-semibold">{detail.item.name}</p>
-                        <p className="text-sm opacity-70">
-                          單價 ${detail.item.price} x {detail.qty}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        <div className="join">
-                          <button
-                            className="btn btn-xs join-item"
-                            onClick={() => {
-                              void setCartItemQty(detail.item, detail.qty - 1);
-                            }}
-                            disabled={activeItemId === detail.itemId}
-                            aria-label={`減少 ${detail.item.name} 數量`}
-                          >
-                            -
-                          </button>
-                          <span className="btn btn-xs join-item no-animation pointer-events-none min-w-10">
-                            {activeItemId === detail.itemId ? "..." : detail.qty}
-                          </span>
-                          <button
-                            className="btn btn-xs btn-primary join-item"
-                            onClick={() => {
-                              void setCartItemQty(detail.item, detail.qty + 1);
-                            }}
-                            disabled={activeItemId === detail.itemId}
-                            aria-label={`增加 ${detail.item.name} 數量`}
-                          >
-                            +
-                          </button>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-semibold">{detail.item.name}</p>
+                          <p className="text-sm opacity-70">
+                            單價 ${detail.item.price} x {detail.qty}
+                          </p>
                         </div>
-                        <p className="font-bold min-w-16 text-right">
-                          ${detail.subtotal}
-                        </p>
+                        <div className="flex items-center gap-3 shrink-0">
+                          <div className="join">
+                            <button
+                              className="btn btn-xs join-item"
+                              onClick={() => {
+                                void setCartItemQty(detail.item, detail.qty - 1);
+                              }}
+                              disabled={activeItemId === detail.itemId}
+                              aria-label={`減少 ${detail.item.name} 數量`}
+                            >
+                              -
+                            </button>
+                            <span className="btn btn-xs join-item no-animation pointer-events-none min-w-10">
+                              {activeItemId === detail.itemId
+                                ? "..."
+                                : detail.qty}
+                            </span>
+                            <button
+                              className="btn btn-xs btn-primary join-item"
+                              onClick={() => {
+                                void setCartItemQty(detail.item, detail.qty + 1);
+                              }}
+                              disabled={activeItemId === detail.itemId}
+                              aria-label={`增加 ${detail.item.name} 數量`}
+                            >
+                              +
+                            </button>
+                          </div>
+                          <p className="font-bold min-w-16 text-right">
+                            ${detail.subtotal}
+                          </p>
+                        </div>
                       </div>
+                      <label className="form-control gap-1">
+                        <span className="label-text text-xs opacity-70">
+                          客製化
+                        </span>
+                        <textarea
+                          className="textarea textarea-bordered textarea-sm min-h-20"
+                          value={detail.customization}
+                          maxLength={200}
+                          placeholder="例：無糖少冰、不要醬、蛋熟一點"
+                          onChange={(event) => {
+                            updateCartItemCustomization(
+                              detail.itemId,
+                              event.target.value,
+                            );
+                          }}
+                          onBlur={(event) => {
+                            void setCartItemQty(
+                              detail.item,
+                              detail.qty,
+                              event.currentTarget.value,
+                            );
+                          }}
+                          disabled={
+                            activeItemId === detail.itemId || isSubmittingOrder
+                          }
+                        />
+                        <p className="text-right text-xs opacity-60">
+                          {detail.customization.length}/200
+                        </p>
+                      </label>
                     </li>
                   ))}
                 </ul>
