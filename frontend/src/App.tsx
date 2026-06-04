@@ -871,7 +871,7 @@ export default function App() {
               navigateTo("/");
             }}
           >
-            🌅 聯大資工早餐菜單
+            🌅 Devin的早餐店
           </button>
         </div>
         <div className="flex-none w-full md:w-auto">
