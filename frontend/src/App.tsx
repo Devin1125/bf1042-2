@@ -55,6 +55,12 @@ export default function App() {
   const [selectedRoleByUserId, setSelectedRoleByUserId] = useState<
     Record<string, Role>
   >({});
+  const [currentPath, setCurrentPath] = useState(window.location.pathname);
+
+  function navigateTo(path: string) {
+    window.history.pushState({}, "", path);
+    setCurrentPath(path);
+  }
 
   function syncCartFromOrder(order: Order) {
     const nextQtyByItemId = order.items.reduce(
@@ -174,6 +180,17 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentPath(window.location.pathname);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
   const userRoles = user?.roles ?? [];
   const hasAnyRole = (roles: Role[]): boolean =>
     roles.some((role) => userRoles.includes(role));
@@ -181,6 +198,25 @@ export default function App() {
   const canUpdateOrderStatus = hasAnyRole(["chef", "owner", "admin"]);
   const canManageMenu = hasAnyRole(["owner", "admin"]);
   const isAdmin = hasAnyRole(["admin"]);
+  const isCustomerRoute = currentPath === "/" || currentPath === "/menu";
+  const isRoleRequestRoute = currentPath === "/role-request";
+  const isCounterRoute = currentPath === "/counter";
+  const isKitchenRoute = currentPath === "/kitchen";
+  const isOwnerRoute = currentPath === "/owner";
+  const isAdminRoute = currentPath === "/admin";
+  const isOperationsRoute =
+    isCounterRoute || isKitchenRoute || isOwnerRoute || isAdminRoute;
+  const canAccessCounter = hasAnyRole(["staff", "owner", "admin"]);
+  const canAccessKitchen = hasAnyRole(["chef", "owner", "admin"]);
+  const canAccessOwner = hasAnyRole(["owner", "admin"]);
+
+  const canAccessCurrentRoute =
+    isCustomerRoute ||
+    isRoleRequestRoute ||
+    (isCounterRoute && canAccessCounter) ||
+    (isKitchenRoute && canAccessKitchen) ||
+    (isOwnerRoute && canAccessOwner) ||
+    (isAdminRoute && isAdmin);
 
   useEffect(() => {
     if (!user) {
@@ -204,7 +240,7 @@ export default function App() {
       setActionError("載入營運資料失敗，請稍後再試。");
       console.error(operationsError);
     });
-  }, [user?.id, userRoles.join(",")]);
+  }, [user?.id, userRoles.join(","), currentPath]);
 
   const grouped = useMemo(() => {
     const groupedItems = items.reduce(
@@ -252,20 +288,33 @@ export default function App() {
       .filter((entry) => entry !== null);
   }, [cartQtyByItemId, items]);
 
-  const submittedOrders = useMemo(
-    () => allOrders.filter((order) => order.status !== "pending"),
-    [allOrders],
-  );
-
-  const roleView = isAdmin
-    ? "admin"
-    : canManageMenu
-      ? "owner"
-      : canUpdateOrderStatus
-        ? "chef"
-        : canViewOperations
-          ? "staff"
+  const roleView = isKitchenRoute
+    ? "chef"
+    : isCounterRoute
+      ? "staff"
+      : isAdminRoute
+        ? "admin"
+        : isOwnerRoute
+          ? "owner"
           : "customer";
+
+  const submittedOrders = useMemo(() => {
+    if (roleView === "chef") {
+      return allOrders.filter((order) =>
+        ["submitted", "preparing", "ready"].includes(order.status),
+      );
+    }
+
+    if (roleView === "staff") {
+      return allOrders.filter((order) => order.status !== "pending");
+    }
+
+    if (roleView === "owner" || roleView === "admin") {
+      return allOrders;
+    }
+
+    return [];
+  }, [allOrders, roleView]);
 
   const operationsTitle =
     roleView === "chef"
@@ -297,10 +346,10 @@ export default function App() {
       },
       {} as Record<OrderStatus, number>,
     );
-  }, [allOrders]);
+  }, [submittedOrders]);
 
   const salesSummary = useMemo(() => {
-    const completedOrders = allOrders.filter(
+    const completedOrders = submittedOrders.filter(
       (order) => order.status !== "pending" && order.status !== "cancelled",
     );
     const totalRevenue = completedOrders.reduce(
@@ -328,10 +377,10 @@ export default function App() {
         .sort((a, b) => b.qty - a.qty)
         .slice(0, 3),
     };
-  }, [allOrders]);
+  }, [submittedOrders]);
 
   async function loadOperationsData(): Promise<void> {
-    if (!user || !canViewOperations) {
+    if (!user || !canViewOperations || !isOperationsRoute) {
       setAllOrders([]);
       return;
     }
@@ -815,9 +864,14 @@ export default function App() {
     <div className="min-h-screen bg-base-200">
       <div className="navbar bg-base-100 shadow-lg flex-col items-stretch gap-2 md:flex-row md:items-center">
         <div className="flex-1 w-full md:w-auto">
-          <a className="btn btn-ghost normal-case text-2xl">
+          <button
+            className="btn btn-ghost normal-case text-2xl"
+            onClick={() => {
+              navigateTo("/");
+            }}
+          >
             🌅 聯大資工早餐菜單
-          </a>
+          </button>
         </div>
         <div className="flex-none w-full md:w-auto">
           <div className="flex flex-wrap gap-2 items-center md:justify-end">
@@ -832,19 +886,73 @@ export default function App() {
             <div className="badge badge-primary">
               {items.length} 個品項・{grouped.categories.length} 類
             </div>
-            <div className="badge badge-secondary">
-              購物車 {cartItemCount} 件
-            </div>
-            <div className="badge badge-accent">總計 ${cartTotal}</div>
-            <button
-              className="btn btn-sm btn-outline"
-              onClick={() => {
-                setIsCartOpen(true);
-              }}
-              disabled={!user}
-            >
-              購物車明細
-            </button>
+            {isCustomerRoute ? (
+              <>
+                <div className="badge badge-secondary">
+                  購物車 {cartItemCount} 件
+                </div>
+                <div className="badge badge-accent">總計 ${cartTotal}</div>
+                <button
+                  className="btn btn-sm btn-outline"
+                  onClick={() => {
+                    setIsCartOpen(true);
+                  }}
+                  disabled={!user}
+                >
+                  購物車明細
+                </button>
+              </>
+            ) : null}
+            {user ? (
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={() => {
+                  navigateTo("/role-request");
+                }}
+              >
+                角色申請
+              </button>
+            ) : null}
+            {canAccessCounter ? (
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={() => {
+                  navigateTo("/counter");
+                }}
+              >
+                櫃台
+              </button>
+            ) : null}
+            {canAccessKitchen ? (
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={() => {
+                  navigateTo("/kitchen");
+                }}
+              >
+                廚房
+              </button>
+            ) : null}
+            {canAccessOwner ? (
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={() => {
+                  navigateTo("/owner");
+                }}
+              >
+                店長
+              </button>
+            ) : null}
+            {isAdmin ? (
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={() => {
+                  navigateTo("/admin");
+                }}
+              >
+                管理
+              </button>
+            ) : null}
             {user ? (
               <button
                 className="btn btn-sm"
@@ -891,7 +999,26 @@ export default function App() {
           </div>
         ) : null}
 
-        {user ? (
+        {!canAccessCurrentRoute ? (
+          <section className="max-w-xl mx-auto card bg-base-100 shadow-sm mb-8">
+            <div className="card-body">
+              <h2 className="card-title">沒有此分支權限</h2>
+              <p className="text-sm opacity-70">
+                請切換到您的角色可使用的頁面，或先提交角色申請。
+              </p>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  navigateTo("/");
+                }}
+              >
+                回到一般點餐
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {user && isRoleRequestRoute ? (
           <section className="max-w-xl mx-auto card bg-base-100 shadow-sm mb-8">
             <div className="card-body">
               <h2 className="card-title">角色申請</h2>
@@ -933,7 +1060,7 @@ export default function App() {
           </section>
         ) : null}
 
-        {canViewOperations ? (
+        {canAccessCurrentRoute && canViewOperations && isOperationsRoute ? (
           <section className="mb-10">
             <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
               <div>
@@ -1072,7 +1199,7 @@ export default function App() {
           </section>
         ) : null}
 
-        {canManageMenu ? (
+        {canAccessCurrentRoute && canManageMenu && (isOwnerRoute || isAdminRoute) ? (
           <section className="mb-10">
             <h2 className="text-2xl font-bold mb-4">菜單管理</h2>
             <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-4">
@@ -1179,7 +1306,7 @@ export default function App() {
           </section>
         ) : null}
 
-        {isAdmin ? (
+        {canAccessCurrentRoute && isAdmin && isAdminRoute ? (
           <section className="mb-10">
             <h2 className="text-2xl font-bold mb-4">系統管理</h2>
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -1306,11 +1433,11 @@ export default function App() {
           </section>
         ) : null}
 
-        {items.length === 0 ? (
+        {canAccessCurrentRoute && isCustomerRoute && items.length === 0 ? (
           <div className="alert alert-info">
             <span>目前沒有菜單資料</span>
           </div>
-        ) : (
+        ) : canAccessCurrentRoute && isCustomerRoute ? (
           grouped.categories.map((category) => (
             <div key={category} className="mb-8">
               <h2 className="text-3xl font-bold mb-4 text-primary border-b-2 border-primary pb-2">
@@ -1362,9 +1489,9 @@ export default function App() {
               </div>
             </div>
           ))
-        )}
+        ) : null}
 
-        {user ? (
+        {user && canAccessCurrentRoute && isCustomerRoute ? (
           <section className="mt-10">
             <h2 className="text-2xl font-bold mb-4">我的訂單歷史</h2>
             {historyLoading ? (
@@ -1409,7 +1536,7 @@ export default function App() {
         ) : null}
       </main>
 
-      {user && isCartOpen ? (
+      {user && isCustomerRoute && isCartOpen ? (
         <>
           <button
             className="fixed inset-0 bg-black/35"
