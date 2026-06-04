@@ -39,7 +39,7 @@
 
 | API | 權限 |
 | --- | --- |
-| `GET /api/orders` | 已登入；顧客只看自己的訂單，店員以上看全部 |
+| `GET /api/orders` | 已登入；依角色回傳不同訂單資料 |
 | `POST /api/menu` | `owner` / `admin` |
 | `PATCH /api/menu/:id` | `owner` / `admin` |
 | `DELETE /api/menu/:id` | `owner` / `admin` |
@@ -48,6 +48,18 @@
 | `GET /api/admin/role-requests` | `admin` |
 | `PATCH /api/admin/role-requests/:id` | `admin` |
 | `PATCH /api/admin/users/:userId/roles` | `admin` |
+
+### 角色看到的訂單資料
+
+`GET /api/orders` 不是單純「有登入就回全部」，後端會依角色回傳不同資料：
+
+| 角色 | 回傳資料 |
+| --- | --- |
+| `customer` | 只回傳自己的訂單 |
+| `staff` | 只回傳已送出的櫃台訂單，不含顧客尚未送出的購物車 |
+| `chef` | 只回傳廚房需要處理的訂單：`submitted` / `preparing` / `ready` |
+| `owner` | 回傳全店所有訂單，供營運與菜單管理使用 |
+| `admin` | 回傳全店所有訂單，並可管理角色與使用者 |
 
 建立第一個 admin：先用 Google 登入一次，再執行：
 

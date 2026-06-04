@@ -310,9 +310,16 @@ app.get(
   "/api/orders",
   async ({ request }) => {
     const user = await requireUser(request);
-    const orders = hasAnyRole(user, staffOrderRoles)
-      ? store.getOrders()
-      : store.getOrdersByUserId(user.id);
+    const allOrders = store.getOrders();
+    const orders = hasAnyRole(user, ["owner", "admin"])
+      ? allOrders
+      : hasAnyRole(user, ["chef"])
+        ? allOrders.filter((order) =>
+            ["submitted", "preparing", "ready"].includes(order.status),
+          )
+        : hasAnyRole(user, ["staff"])
+          ? allOrders.filter((order) => order.status !== "pending")
+          : store.getOrdersByUserId(user.id);
 
     return {
       data: orders.map(toOrderResponse),
@@ -323,7 +330,7 @@ app.get(
       tags: ["orders"],
       summary: "List orders by role",
       description:
-        "Customers see only their orders. Staff, chef, owner and admin see all orders.",
+        "Customers see only their orders. Staff see submitted front-counter orders. Chefs see active kitchen orders. Owner/admin see all orders.",
     },
     response: {
       200: orderListResponseSchema,

@@ -257,6 +257,48 @@ export default function App() {
     [allOrders],
   );
 
+  const roleView = isAdmin
+    ? "admin"
+    : canManageMenu
+      ? "owner"
+      : canUpdateOrderStatus
+        ? "chef"
+        : canViewOperations
+          ? "staff"
+          : "customer";
+
+  const operationsTitle =
+    roleView === "chef"
+      ? "廚房製作看板"
+      : roleView === "staff"
+        ? "櫃台訂單看板"
+        : roleView === "owner"
+          ? "店長營運總覽"
+          : roleView === "admin"
+            ? "系統管理總覽"
+            : "我的訂單";
+
+  const operationsDescription =
+    roleView === "chef"
+      ? "只顯示待處理、製作中與可取餐訂單，讓廚房專心處理餐點。"
+      : roleView === "staff"
+        ? "顯示已送出的櫃台訂單，協助取餐核對與現場服務。"
+        : roleView === "owner"
+          ? "顯示全店訂單、營收與菜單管理資料。"
+          : roleView === "admin"
+            ? "顯示全店資料，並提供角色申請與使用者權限管理。"
+            : "";
+
+  const statusCounts = useMemo(() => {
+    return allOrders.reduce(
+      (acc, order) => {
+        acc[order.status] = (acc[order.status] ?? 0) + 1;
+        return acc;
+      },
+      {} as Record<OrderStatus, number>,
+    );
+  }, [allOrders]);
+
   const salesSummary = useMemo(() => {
     const completedOrders = allOrders.filter(
       (order) => order.status !== "pending" && order.status !== "cancelled",
@@ -894,7 +936,12 @@ export default function App() {
         {canViewOperations ? (
           <section className="mb-10">
             <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
-              <h2 className="text-2xl font-bold">營運工作台</h2>
+              <div>
+                <h2 className="text-2xl font-bold">{operationsTitle}</h2>
+                <p className="text-sm opacity-70 mt-1">
+                  {operationsDescription}
+                </p>
+              </div>
               <button
                 className="btn btn-sm btn-outline"
                 onClick={() => {
@@ -907,25 +954,53 @@ export default function App() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               <div className="stat bg-base-100 rounded-lg shadow-sm">
-                <div className="stat-title">有效訂單</div>
+                <div className="stat-title">
+                  {roleView === "chef" ? "廚房佇列" : "可見訂單"}
+                </div>
                 <div className="stat-value text-primary">
-                  {salesSummary.orderCount}
+                  {submittedOrders.length}
                 </div>
               </div>
               <div className="stat bg-base-100 rounded-lg shadow-sm">
-                <div className="stat-title">營收</div>
-                <div className="stat-value text-success">
-                  ${salesSummary.totalRevenue}
+                <div className="stat-title">
+                  {roleView === "chef"
+                    ? "製作中"
+                    : roleView === "staff"
+                      ? "可取餐"
+                      : "營收"}
                 </div>
+                {roleView === "chef" ? (
+                  <div className="stat-value text-warning">
+                    {statusCounts.preparing ?? 0}
+                  </div>
+                ) : roleView === "staff" ? (
+                  <div className="stat-value text-info">
+                    {statusCounts.ready ?? 0}
+                  </div>
+                ) : (
+                  <div className="stat-value text-success">
+                    ${salesSummary.totalRevenue}
+                  </div>
+                )}
               </div>
               <div className="stat bg-base-100 rounded-lg shadow-sm">
-                <div className="stat-title">熱門品項</div>
+                <div className="stat-title">
+                  {roleView === "chef"
+                    ? "待處理"
+                    : roleView === "staff"
+                      ? "已完成"
+                      : "熱門品項"}
+                </div>
                 <div className="stat-desc">
-                  {salesSummary.topItems.length > 0
-                    ? salesSummary.topItems
-                        .map((item) => `${item.name} x${item.qty}`)
-                        .join("、")
-                    : "尚無資料"}
+                  {roleView === "chef"
+                    ? `${statusCounts.submitted ?? 0} 張待開始`
+                    : roleView === "staff"
+                      ? `${statusCounts.completed ?? 0} 張已完成`
+                      : salesSummary.topItems.length > 0
+                        ? salesSummary.topItems
+                            .map((item) => `${item.name} x${item.qty}`)
+                            .join("、")
+                        : "尚無資料"}
                 </div>
               </div>
             </div>
@@ -936,7 +1011,7 @@ export default function App() {
                     <th>訂單</th>
                     <th>狀態</th>
                     <th>內容</th>
-                    <th>金額</th>
+                    {roleView !== "chef" ? <th>金額</th> : null}
                     <th>處理</th>
                   </tr>
                 </thead>
@@ -954,7 +1029,7 @@ export default function App() {
                           .map((detail) => `${detail.item.name} x${detail.qty}`)
                           .join("、")}
                       </td>
-                      <td>${order.total}</td>
+                      {roleView !== "chef" ? <td>${order.total}</td> : null}
                       <td>
                         {canUpdateOrderStatus ? (
                           <select
@@ -984,7 +1059,11 @@ export default function App() {
                   ))}
                   {submittedOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={5}>目前沒有送出的訂單。</td>
+                      <td colSpan={roleView === "chef" ? 4 : 5}>
+                        {roleView === "chef"
+                          ? "目前沒有需要製作的訂單。"
+                          : "目前沒有送出的訂單。"}
+                      </td>
                     </tr>
                   ) : null}
                 </tbody>
