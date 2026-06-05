@@ -31,12 +31,24 @@ function padDatePart(value: number): string {
   return String(value).padStart(2, "0");
 }
 
-function toDateTimeLocalInputValue(date: Date): string {
+function toDateInputValue(date: Date): string {
   return [
     date.getFullYear(),
     padDatePart(date.getMonth() + 1),
     padDatePart(date.getDate()),
-  ].join("-") + `T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
+  ].join("-");
+}
+
+function toDateTimeLocalInputValue(date: Date): string {
+  return `${toDateInputValue(date)}T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
+}
+
+function joinDateAndTime(dateValue: string, timeValue: string): string {
+  if (!dateValue || !timeValue) {
+    return "";
+  }
+
+  return `${dateValue}T${timeValue}`;
 }
 
 function getDefaultPickupAtInputValue(): string {
@@ -61,23 +73,17 @@ function getDefaultPickupAtInputValue(): string {
   return toDateTimeLocalInputValue(openingAt);
 }
 
-function getNextReservationSlot(hour: number, minute: number): Date {
-  const slot = new Date();
-  slot.setHours(hour, minute, 0, 0);
-
-  if (slot.getTime() < Date.now() + reservationLeadTimeMinutes * 60_000) {
-    slot.setDate(slot.getDate() + 1);
-  }
-
-  return slot;
-}
-
 function isWithinBusinessHours(date: Date): boolean {
   const minutes = date.getHours() * 60 + date.getMinutes();
   return (
     minutes >= businessOpenHour * 60 &&
     minutes <= businessCloseHour * 60
   );
+}
+
+function isReservationSlotAvailable(date: Date): boolean {
+  const earliestPickupAt = Date.now() + reservationLeadTimeMinutes * 60_000;
+  return isWithinBusinessHours(date) && date.getTime() >= earliestPickupAt;
 }
 
 function isSameCalendarDate(left: Date, right: Date): boolean {
@@ -429,17 +435,23 @@ export default function App() {
       .filter((entry) => entry !== null);
   }, [cartCustomizationByItemId, cartQtyByItemId, items]);
 
-  const reservationPickupMin = useMemo(
-    () => toDateTimeLocalInputValue(new Date()),
+  const reservationDateMin = useMemo(
+    () => toDateInputValue(new Date()),
     [],
   );
+  const reservationDateValue = reservationPickupAt.slice(0, 10);
+  const reservationTimeValue = reservationPickupAt.slice(11, 16);
+  const defaultReservationTimeValue = `${padDatePart(businessOpenHour)}:00`;
   const reservationPresetSlots = useMemo(
     () =>
       reservationPresetOptions.map((option) => {
-        const slot = getNextReservationSlot(option.hour, option.minute);
+        const baseDateValue = reservationDateValue || reservationDateMin;
+        const timeValue = `${padDatePart(option.hour)}:${padDatePart(option.minute)}`;
+        const slot = new Date(joinDateAndTime(baseDateValue, timeValue));
         return {
           ...option,
-          value: toDateTimeLocalInputValue(slot),
+          value: joinDateAndTime(baseDateValue, timeValue),
+          disabled: Number.isNaN(slot.getTime()) || !isReservationSlotAvailable(slot),
           label: formatReservationPresetLabel(
             option.label,
             option.hour,
@@ -448,7 +460,7 @@ export default function App() {
           ),
         };
       }),
-    [],
+    [reservationDateMin, reservationDateValue],
   );
   const reservationSummary = formatOrderDateTime(reservationPickupAt);
 
@@ -1140,7 +1152,7 @@ export default function App() {
                   }}
                   disabled={!user}
                 >
-                  預約明細
+                  送出訂單(購物車明細)
                 </button>
               </>
             ) : null}
@@ -1252,15 +1264,20 @@ export default function App() {
                 </div>
                 <label className="form-control w-full">
                   <span className="label-text font-semibold mb-2">
-                    取餐時段
+                    取餐日期
                   </span>
                   <input
-                    type="datetime-local"
+                    type="date"
                     className="input input-bordered w-full"
-                    value={reservationPickupAt}
-                    min={reservationPickupMin}
+                    value={reservationDateValue || reservationDateMin}
+                    min={reservationDateMin}
                     onChange={(event) => {
-                      setReservationPickupAt(event.target.value);
+                      setReservationPickupAt(
+                        joinDateAndTime(
+                          event.target.value,
+                          reservationTimeValue || defaultReservationTimeValue,
+                        ),
+                      );
                     }}
                   />
                   <span className="label-text-alt mt-2 opacity-70">
@@ -1269,7 +1286,7 @@ export default function App() {
                 </label>
               </div>
               <div className="lg:w-[28rem]">
-                <div className="text-sm font-semibold mb-2">快速時段</div>
+                <div className="text-sm font-semibold mb-2">取餐時段</div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {reservationPresetSlots.map((slot) => (
                     <button
@@ -1280,6 +1297,7 @@ export default function App() {
                           ? "btn-primary"
                           : "btn-outline"
                       }`}
+                      disabled={slot.disabled}
                       onClick={() => {
                         setReservationPickupAt(slot.value);
                       }}
@@ -1890,7 +1908,7 @@ export default function App() {
           />
           <aside className="fixed right-0 top-0 h-full w-full max-w-md bg-base-100 shadow-2xl z-10 flex flex-col">
             <div className="p-4 border-b border-base-300 flex items-center justify-between">
-              <h2 className="text-xl font-bold">預約明細</h2>
+              <h2 className="text-xl font-bold">送出訂單(購物車明細)</h2>
               <button
                 className="btn btn-sm btn-ghost"
                 onClick={() => {
@@ -1992,15 +2010,20 @@ export default function App() {
             <div className="p-4 border-t border-base-300 space-y-3">
               <label className="form-control w-full">
                 <div className="label">
-                  <span className="label-text font-semibold">預約取餐時段</span>
+                  <span className="label-text font-semibold">預約取餐日期</span>
                 </div>
                 <input
-                  type="datetime-local"
+                  type="date"
                   className="input input-bordered w-full"
-                  value={reservationPickupAt}
-                  min={reservationPickupMin}
+                  value={reservationDateValue || reservationDateMin}
+                  min={reservationDateMin}
                   onChange={(event) => {
-                    setReservationPickupAt(event.target.value);
+                    setReservationPickupAt(
+                      joinDateAndTime(
+                        event.target.value,
+                        reservationTimeValue || defaultReservationTimeValue,
+                      ),
+                    );
                   }}
                   disabled={cartDetails.length === 0 || isSubmittingOrder}
                 />
@@ -2017,10 +2040,14 @@ export default function App() {
                           ? "btn-primary"
                           : "btn-outline"
                       }`}
+                      disabled={
+                        slot.disabled ||
+                        cartDetails.length === 0 ||
+                        isSubmittingOrder
+                      }
                       onClick={() => {
                         setReservationPickupAt(slot.value);
                       }}
-                      disabled={cartDetails.length === 0 || isSubmittingOrder}
                     >
                       {slot.label}
                     </button>
