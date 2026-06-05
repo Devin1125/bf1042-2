@@ -8,6 +8,7 @@ import {
   roleRequestSchema,
   roleSchema,
   sessionUserSchema,
+  userCouponSchema,
 } from "./contracts.ts";
 import toTaipeiDateTime from "../util.ts";
 
@@ -110,7 +111,13 @@ export const submitOrderBodySchema = z.object({
     return !Number.isNaN(pickupDate.getTime());
   }, "pickupAt must be a valid date time"),
   note: z.string().max(200).optional(),
-  couponCode: z.string().max(40).optional(),
+  couponId: z.number().int().min(1).optional(),
+});
+
+/** POST /api/coupons/earn */
+export const earnCouponBodySchema = z.object({
+  couponCode: z.string().max(40),
+  earnedFrom: z.enum(["memory", "wheel", "quiz"]),
 });
 
 /** POST /api/users/me/role-request */
@@ -179,6 +186,14 @@ export const roleRequestResponseSchema = z.object({
 
 export const roleRequestListResponseSchema = z.object({
   data: z.array(roleRequestSchema),
+});
+
+export const userCouponResponseSchema = z.object({
+  data: userCouponSchema,
+});
+
+export const userCouponListResponseSchema = z.object({
+  data: z.array(userCouponSchema),
 });
 
 export const adminUserResponseSchema = z.object({

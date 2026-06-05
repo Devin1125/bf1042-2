@@ -22,6 +22,7 @@ export const orderStatusSchema = z.enum([
   "completed",
   "cancelled",
 ]);
+export const userCouponStatusSchema = z.enum(["active", "used"]);
 
 // ─── User schemas（業務層）──────────────────────────────────────────────────
 // userSchema：完整使用者資料（業務/資料層使用，不對外暴露）
@@ -82,6 +83,19 @@ export const roleRequestSchema = z.object({
   reviewNote: z.string().optional(),
 });
 
+export const userCouponSchema = z.object({
+  id: z.number().int().min(1),
+  userId: z.string().min(1),
+  code: z.string().min(1),
+  label: z.string().min(1),
+  discount: z.number().int().min(0),
+  status: userCouponStatusSchema,
+  earnedFrom: z.string().min(1),
+  earnedAt: z.string().min(1),
+  usedAt: z.string().min(1).optional(),
+  usedOrderId: z.number().int().min(1).optional(),
+});
+
 export const adminUserSchema = sessionUserSchema.extend({
   emailVerified: z.boolean().optional(),
   createdAt: z.string().optional(),
@@ -97,6 +111,7 @@ export type OrderItem = z.infer<typeof orderItemSchema>;
 export type Order = z.infer<typeof orderSchema>;
 export type RoleRequest = z.infer<typeof roleRequestSchema>;
 export type AdminUser = z.infer<typeof adminUserSchema>;
+export type UserCoupon = z.infer<typeof userCouponSchema>;
 
 export interface ApiDataResponse<T> {
   data: T;

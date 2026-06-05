@@ -4,6 +4,7 @@ import type {
   Order,
   OrderItem,
   OrderStatus,
+  UserCoupon,
 } from "../../shared/contracts.ts";
 import type { Store } from "../Store.ts";
 
@@ -18,9 +19,11 @@ interface DataStore {
   users: StoredUser[];
   menu: MenuItem[];
   orders: Order[];
+  coupons?: UserCoupon[];
   userIdCounter: number;
   menuIdCounter: number;
   orderIdCounter: number;
+  couponIdCounter?: number;
 }
 
 interface JsonFileStoreOptions {
@@ -142,9 +145,11 @@ export class JsonFileStore implements Store {
   private users: StoredUser[] = [];
   private menu: MenuItem[] = [];
   private orders: Order[] = [];
+  private coupons: UserCoupon[] = [];
   private userIdCounter = 0;
   private menuIdCounter = 0;
   private orderIdCounter = 0;
+  private couponIdCounter = 0;
   private persistQueue: Promise<void> = Promise.resolve();
 
   constructor(options: JsonFileStoreOptions) {
@@ -213,9 +218,24 @@ export class JsonFileStore implements Store {
               ? order.note
               : undefined,
         })),
+        coupons: Array.isArray(parsed.coupons)
+          ? parsed.coupons.map((coupon) => ({
+              id: coupon.id,
+              userId: normalizeUserId(coupon.userId),
+              code: coupon.code,
+              label: coupon.label,
+              discount: coupon.discount,
+              status: coupon.status === "used" ? "used" : "active",
+              earnedFrom: coupon.earnedFrom,
+              earnedAt: coupon.earnedAt,
+              usedAt: coupon.usedAt,
+              usedOrderId: coupon.usedOrderId,
+            }))
+          : [],
         userIdCounter: parsed.userIdCounter ?? 0,
         menuIdCounter: parsed.menuIdCounter ?? 0,
         orderIdCounter: parsed.orderIdCounter ?? 0,
+        couponIdCounter: parsed.couponIdCounter ?? 0,
       });
     } catch (error) {
       console.warn("[store] load failed, fallback to initial store", error);
@@ -287,6 +307,36 @@ export class JsonFileStore implements Store {
     await this.persist();
 
     return removedMenuItem ?? null;
+  }
+
+  async getCouponsByUserId(userId: string): Promise<ReadonlyArray<UserCoupon>> {
+    return this.coupons
+      .filter((coupon) => coupon.userId === userId)
+      .sort((a, b) => b.earnedAt.localeCompare(a.earnedAt));
+  }
+
+  async createCoupon(input: {
+    userId: string;
+    code: string;
+    label: string;
+    discount: number;
+    earnedFrom: string;
+  }): Promise<UserCoupon> {
+    const coupon: UserCoupon = {
+      id: ++this.couponIdCounter,
+      userId: input.userId,
+      code: input.code,
+      label: input.label,
+      discount: input.discount,
+      status: "active",
+      earnedFrom: input.earnedFrom,
+      earnedAt: new Date().toISOString(),
+    };
+
+    this.coupons.push(coupon);
+    await this.persist();
+
+    return coupon;
   }
 
   getOrders(): ReadonlyArray<Order> {
@@ -447,11 +497,7 @@ export class JsonFileStore implements Store {
       userId: string;
       pickupAt?: string;
       note?: string;
-      coupon?: {
-        code: string;
-        label: string;
-        discount: number;
-      };
+      couponId?: number;
     },
   ): Promise<
     | { ok: true; order: Order }
@@ -461,7 +507,8 @@ export class JsonFileStore implements Store {
           | "ORDER_NOT_FOUND"
           | "ORDER_NOT_OWNED"
           | "ORDER_NOT_EDITABLE"
-          | "EMPTY_ORDER";
+          | "EMPTY_ORDER"
+          | "COUPON_NOT_FOUND";
       }
   > {
     const order = this.orders.find((targetOrder) => targetOrder.id === orderId);
@@ -482,16 +529,35 @@ export class JsonFileStore implements Store {
     }
 
     const subtotal = calculateOrderTotal(order.items);
-    const discount = Math.min(input.coupon?.discount ?? 0, subtotal);
+    const coupon = input.couponId
+      ? this.coupons.find(
+          (targetCoupon) =>
+            targetCoupon.id === input.couponId &&
+            targetCoupon.userId === input.userId &&
+            targetCoupon.status === "active",
+        )
+      : undefined;
+    if (input.couponId && !coupon) {
+      return { ok: false, code: "COUPON_NOT_FOUND" };
+    }
+
+    const discount = Math.min(coupon?.discount ?? 0, subtotal);
+    const submittedAt = new Date().toISOString();
 
     order.status = "submitted";
-    order.submittedAt = new Date().toISOString();
+    order.submittedAt = submittedAt;
     order.pickupAt = input.pickupAt ?? order.submittedAt;
     order.note = input.note;
     order.discount = discount;
-    order.couponCode = input.coupon?.code;
-    order.couponLabel = input.coupon?.label;
+    order.couponCode = coupon?.code;
+    order.couponLabel = coupon?.label;
     order.total = Math.max(0, subtotal - discount);
+
+    if (coupon) {
+      coupon.status = "used";
+      coupon.usedAt = submittedAt;
+      coupon.usedOrderId = order.id;
+    }
     await this.persist();
 
     return { ok: true, order };
@@ -502,9 +568,11 @@ export class JsonFileStore implements Store {
       users: cloneDefaultUsers(),
       menu: cloneDefaultMenu(),
       orders: [],
+      coupons: [],
       userIdCounter: defaultUsers.length,
       menuIdCounter: defaultMenu.length,
       orderIdCounter: 0,
+      couponIdCounter: 0,
     };
   }
 
@@ -512,6 +580,7 @@ export class JsonFileStore implements Store {
     this.users = store.users;
     this.menu = store.menu;
     this.orders = store.orders;
+    this.coupons = store.coupons ?? [];
 
     const maxUserId = this.users.reduce((max, user) => {
       const asNumber = Number.parseInt(user.id, 10);
@@ -526,10 +595,18 @@ export class JsonFileStore implements Store {
       (max, order) => Math.max(max, order.id),
       0,
     );
+    const maxCouponId = this.coupons.reduce(
+      (max, coupon) => Math.max(max, coupon.id),
+      0,
+    );
 
     this.userIdCounter = Math.max(store.userIdCounter || 0, maxUserId);
     this.menuIdCounter = Math.max(store.menuIdCounter || 0, maxMenuId);
     this.orderIdCounter = Math.max(store.orderIdCounter || 0, maxOrderId);
+    this.couponIdCounter = Math.max(
+      store.couponIdCounter || 0,
+      maxCouponId,
+    );
   }
 
   private buildStoreSnapshot(): DataStore {
@@ -537,9 +614,11 @@ export class JsonFileStore implements Store {
       users: this.users,
       menu: this.menu,
       orders: this.orders,
+      coupons: this.coupons,
       userIdCounter: this.userIdCounter,
       menuIdCounter: this.menuIdCounter,
       orderIdCounter: this.orderIdCounter,
+      couponIdCounter: this.couponIdCounter,
     };
   }
 

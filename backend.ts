@@ -11,6 +11,7 @@ import {
   createMenuItemBodySchema,
   createRoleRequestBodySchema,
   deleteMenuItemParamsSchema,
+  earnCouponBodySchema,
   getOrderByIdParamsSchema,
   healthResponseSchema,
   listRoleRequestsQuerySchema,
@@ -35,6 +36,8 @@ import {
   updateOrderParamsSchema,
   updateOrderStatusBodySchema,
   updateOrderStatusParamsSchema,
+  userCouponListResponseSchema,
+  userCouponResponseSchema,
 } from "./shared/route-schemas.ts";
 import { createStore } from "./store/index.ts";
 import { auth, getCurrentUser } from "./auth/better-auth.ts";
@@ -467,6 +470,63 @@ app.post(
   },
 );
 
+// 使用者優惠券錢包
+app.get(
+  "/api/coupons",
+  async ({ request }) => {
+    const user = await requireUser(request);
+    const coupons = await store.getCouponsByUserId(user.id);
+    return { data: coupons };
+  },
+  {
+    detail: {
+      tags: ["coupons"],
+      summary: "List user coupons",
+      description: "Return the coupon wallet belonging to the current user.",
+    },
+    response: {
+      200: userCouponListResponseSchema,
+      401: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.post(
+  "/api/coupons/earn",
+  async ({ body, request, set }) => {
+    const user = await requireUser(request);
+    const coupon = getBreakfastCouponByCode(body.couponCode);
+    if (!coupon) {
+      set.status = 400;
+      return { error: "Invalid coupon code" };
+    }
+
+    const earnedCoupon = await store.createCoupon({
+      userId: user.id,
+      code: coupon.code,
+      label: coupon.label,
+      discount: coupon.discount,
+      earnedFrom: body.earnedFrom,
+    });
+
+    set.status = 201;
+    return { data: earnedCoupon };
+  },
+  {
+    body: earnCouponBodySchema,
+    detail: {
+      tags: ["coupons"],
+      summary: "Earn a coupon",
+      description: "Save a coupon earned from a breakfast mini game.",
+    },
+    response: {
+      201: userCouponResponseSchema,
+      400: apiErrorResponseSchema,
+      401: apiErrorResponseSchema,
+    },
+  },
+);
+
 // 獲取單筆訂單
 app.get(
   "/api/orders/:id",
@@ -870,19 +930,11 @@ app.post(
       return { error: "Pickup time must use a 10-minute interval" };
     }
 
-    const coupon = body.couponCode
-      ? getBreakfastCouponByCode(body.couponCode)
-      : undefined;
-    if (body.couponCode && !coupon) {
-      set.status = 400;
-      return { error: "Invalid coupon code" };
-    }
-
     const result = await store.submitOrder(orderId, {
       userId: user.id,
       pickupAt: body.pickupAt,
       note: trimmedNote ? trimmedNote : undefined,
-      ...(coupon ? { coupon } : {}),
+      couponId: body.couponId,
     });
 
     if (!result.ok && result.code === "ORDER_NOT_FOUND") {
@@ -903,6 +955,11 @@ app.post(
     if (!result.ok && result.code === "EMPTY_ORDER") {
       set.status = 400;
       return { error: "Empty order cannot be submitted" };
+    }
+
+    if (!result.ok && result.code === "COUPON_NOT_FOUND") {
+      set.status = 400;
+      return { error: "Coupon is not available" };
     }
 
     if (!result.ok) {

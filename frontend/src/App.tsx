@@ -9,10 +9,10 @@ import type {
   Role,
   RoleRequest,
   SessionUser,
+  UserCoupon,
 } from "../../shared/contracts.ts";
 import {
   breakfastCouponCatalog,
-  getBreakfastCouponByCode,
   type BreakfastCoupon,
 } from "../../shared/coupons.ts";
 
@@ -37,25 +37,21 @@ const reservationSlotOptions = Array.from(
     };
   },
 );
-const couponGameOptions = [
-  {
-    id: "cards",
-    title: "翻早餐牌",
-    description: "翻出今天的早餐幸運牌，最高可拿 $20 折扣。",
-    actionLabel: "翻一張",
-  },
-  {
-    id: "spin",
-    title: "幸運轉盤",
-    description: "轉到紅茶、奶茶或蛋餅，拿一張早餐券。",
-    actionLabel: "轉一下",
-  },
-  {
-    id: "quiz",
-    title: "早餐快問快答",
-    description: "答對營業時間小題目，立刻拿優惠。",
-    actionLabel: "挑戰",
-  },
+type CouponGameSource = "memory" | "wheel" | "quiz";
+type MemoryCard = {
+  id: number;
+  value: string;
+  label: string;
+};
+
+const memoryCardPairs = [
+  { value: "toast", label: "吐司" },
+  { value: "milk-tea", label: "奶茶" },
+] as const;
+const quizOptions = [
+  { label: "06:00-09:00", correct: false },
+  { label: "06:00-10:00", correct: true },
+  { label: "07:00-12:00", correct: false },
 ] as const;
 
 function buildApiUrl(path: string) {
@@ -187,13 +183,20 @@ function formatOrderItemText(detail: Order["items"][number]): string {
   }`;
 }
 
-function pickCouponForGame(gameId: string): BreakfastCoupon {
-  const gameOffset =
-    gameId === "cards" ? 0 : gameId === "spin" ? 1 : 2;
-  const index =
-    (Math.floor(Math.random() * breakfastCouponCatalog.length) + gameOffset) %
-    breakfastCouponCatalog.length;
-  return breakfastCouponCatalog[index];
+function createMemoryCards(): MemoryCard[] {
+  return [...memoryCardPairs, ...memoryCardPairs]
+    .sort(() => Math.random() - 0.5)
+    .map((card, index) => ({
+      ...card,
+      id: index,
+    }));
+}
+
+function findBreakfastCoupon(couponCode: BreakfastCoupon["code"]) {
+  return (
+    breakfastCouponCatalog.find((coupon) => coupon.code === couponCode) ??
+    breakfastCouponCatalog[0]
+  );
 }
 
 export default function App() {
@@ -222,10 +225,24 @@ export default function App() {
     getDefaultPickupAtInputValue(),
   );
   const [reservationNote, setReservationNote] = useState("");
-  const [activeCouponCode, setActiveCouponCode] = useState("");
+  const [userCoupons, setUserCoupons] = useState<UserCoupon[]>([]);
+  const [selectedCouponId, setSelectedCouponId] = useState<number | "">("");
   const [couponGameMessage, setCouponGameMessage] = useState(
-    "玩一局小遊戲，早餐券會自動套用到這次訂單。",
+    "玩一局小遊戲，贏到的早餐券會存進優惠券錢包。",
   );
+  const [memoryCards, setMemoryCards] = useState<MemoryCard[]>(() =>
+    createMemoryCards(),
+  );
+  const [flippedMemoryCardIds, setFlippedMemoryCardIds] = useState<number[]>(
+    [],
+  );
+  const [matchedMemoryCardIds, setMatchedMemoryCardIds] = useState<number[]>(
+    [],
+  );
+  const [memoryMoves, setMemoryMoves] = useState(0);
+  const [wheelRotation, setWheelRotation] = useState(0);
+  const [isWheelSpinning, setIsWheelSpinning] = useState(false);
+  const [quizAnswer, setQuizAnswer] = useState("");
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [roleRequests, setRoleRequests] = useState<RoleRequest[]>([]);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
@@ -284,8 +301,8 @@ export default function App() {
     setIsCartOpen(false);
     setReservationPickupAt(getDefaultPickupAtInputValue());
     setReservationNote("");
-    setActiveCouponCode("");
-    setCouponGameMessage("玩一局小遊戲，早餐券會自動套用到這次訂單。");
+    setSelectedCouponId("");
+    setCouponGameMessage("玩一局小遊戲，贏到的早餐券會存進優惠券錢包。");
   }
 
   async function loadCurrentOrder(): Promise<Order | null> {
@@ -329,8 +346,36 @@ export default function App() {
     }
   }
 
+  async function loadUserCoupons(): Promise<void> {
+    const response = await fetch(buildApiUrl("/api/coupons"), {
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      throw new Error(`Load coupons failed: HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<UserCoupon[]>;
+    const coupons = Array.isArray(payload?.data) ? payload.data : [];
+
+    setUserCoupons(coupons);
+    setSelectedCouponId((currentCouponId) => {
+      if (
+        currentCouponId !== "" &&
+        coupons.some(
+          (coupon) =>
+            coupon.id === currentCouponId && coupon.status === "active",
+        )
+      ) {
+        return currentCouponId;
+      }
+
+      return "";
+    });
+  }
+
   async function refreshUserOrders(): Promise<void> {
-    await Promise.all([loadCurrentOrder(), loadOrderHistory()]);
+    await Promise.all([loadCurrentOrder(), loadOrderHistory(), loadUserCoupons()]);
   }
 
   useEffect(() => {
@@ -431,6 +476,8 @@ export default function App() {
       setAllOrders([]);
       setRoleRequests([]);
       setAdminUsers([]);
+      setUserCoupons([]);
+      setSelectedCouponId("");
       setIsCartOpen(false);
       resetCartState();
       return;
@@ -524,10 +571,15 @@ export default function App() {
     [reservationDateMin, reservationDateValue],
   );
   const reservationSummary = formatOrderDateTime(reservationPickupAt);
-  const activeCoupon = activeCouponCode
-    ? getBreakfastCouponByCode(activeCouponCode)
-    : undefined;
-  const couponDiscount = Math.min(activeCoupon?.discount ?? 0, cartTotal);
+  const availableCoupons = useMemo(
+    () => userCoupons.filter((coupon) => coupon.status === "active"),
+    [userCoupons],
+  );
+  const selectedCoupon =
+    selectedCouponId === ""
+      ? undefined
+      : availableCoupons.find((coupon) => coupon.id === selectedCouponId);
+  const couponDiscount = Math.min(selectedCoupon?.discount ?? 0, cartTotal);
   const payableCartTotal = Math.max(0, cartTotal - couponDiscount);
 
   const roleView = isKitchenRoute
@@ -881,10 +933,153 @@ export default function App() {
     await setCartItemQty(item, (cartQtyByItemId[item.id] ?? 0) + 1);
   }
 
-  function playCouponGame(game: (typeof couponGameOptions)[number]): void {
-    const coupon = pickCouponForGame(game.id);
-    setActiveCouponCode(coupon.code);
-    setCouponGameMessage(`${game.title} 成功獲得「${coupon.label}」。`);
+  async function earnCoupon(
+    couponCode: BreakfastCoupon["code"],
+    earnedFrom: CouponGameSource,
+    gameResultMessage: string,
+  ): Promise<void> {
+    if (!user) {
+      setCouponGameMessage("請先登入，贏到的優惠券才可以存進錢包。");
+      return;
+    }
+
+    try {
+      const response = await fetch(buildApiUrl("/api/coupons/earn"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          couponCode,
+          earnedFrom,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Earn coupon failed: HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as ApiDataResponse<UserCoupon>;
+      if (!payload?.data) {
+        throw new Error("Earn coupon response missing data");
+      }
+
+      setUserCoupons((currentCoupons) => [
+        payload.data,
+        ...currentCoupons.filter((coupon) => coupon.id !== payload.data.id),
+      ]);
+      setSelectedCouponId(payload.data.id);
+      setCouponGameMessage(`${gameResultMessage} 已存進優惠券錢包。`);
+    } catch (couponError) {
+      setCouponGameMessage("優惠券儲存失敗，請稍後再玩一次。");
+      console.error(couponError);
+    }
+  }
+
+  function resetMemoryGame(): void {
+    setMemoryCards(createMemoryCards());
+    setFlippedMemoryCardIds([]);
+    setMatchedMemoryCardIds([]);
+    setMemoryMoves(0);
+  }
+
+  function handleMemoryCardClick(card: MemoryCard): void {
+    if (
+      matchedMemoryCardIds.includes(card.id) ||
+      flippedMemoryCardIds.includes(card.id) ||
+      flippedMemoryCardIds.length >= 2
+    ) {
+      return;
+    }
+
+    const nextFlippedCardIds = [...flippedMemoryCardIds, card.id];
+    setFlippedMemoryCardIds(nextFlippedCardIds);
+
+    if (nextFlippedCardIds.length < 2) {
+      return;
+    }
+
+    const nextMoveCount = memoryMoves + 1;
+    const [leftCardId, rightCardId] = nextFlippedCardIds;
+    const leftCard = memoryCards.find((targetCard) => targetCard.id === leftCardId);
+    const rightCard = memoryCards.find((targetCard) => targetCard.id === rightCardId);
+    setMemoryMoves(nextMoveCount);
+
+    if (leftCard && rightCard && leftCard.value === rightCard.value) {
+      const nextMatchedCardIds = [
+        ...matchedMemoryCardIds,
+        leftCardId,
+        rightCardId,
+      ];
+      setMatchedMemoryCardIds(nextMatchedCardIds);
+      setFlippedMemoryCardIds([]);
+
+      if (nextMatchedCardIds.length === memoryCards.length) {
+        const couponCode =
+          nextMoveCount <= 2
+            ? "FULLMORNING20"
+            : nextMoveCount <= 4
+              ? "MILKTEA15"
+              : "SUNNY10";
+        const coupon = findBreakfastCoupon(couponCode);
+        void earnCoupon(
+          coupon.code,
+          "memory",
+          `翻牌配對完成，${nextMoveCount} 步拿到「${coupon.label}」`,
+        );
+      }
+      return;
+    }
+
+    window.setTimeout(() => {
+      setFlippedMemoryCardIds((currentCardIds) =>
+        currentCardIds.includes(leftCardId) && currentCardIds.includes(rightCardId)
+          ? []
+          : currentCardIds,
+      );
+    }, 650);
+  }
+
+  function spinCouponWheel(): void {
+    if (!user) {
+      setCouponGameMessage("請先登入，贏到的優惠券才可以存進錢包。");
+      return;
+    }
+
+    if (isWheelSpinning) {
+      return;
+    }
+
+    const couponIndex = Math.floor(Math.random() * breakfastCouponCatalog.length);
+    const coupon = breakfastCouponCatalog[couponIndex];
+    setIsWheelSpinning(true);
+    setCouponGameMessage("幸運轉盤轉動中...");
+    setWheelRotation((currentRotation) => currentRotation + 720 + couponIndex * 120 + 28);
+
+    window.setTimeout(() => {
+      void earnCoupon(
+        coupon.code,
+        "wheel",
+        `幸運轉盤停在「${coupon.label}」`,
+      ).finally(() => {
+        setIsWheelSpinning(false);
+      });
+    }, 900);
+  }
+
+  function answerCouponQuiz(option: (typeof quizOptions)[number]): void {
+    setQuizAnswer(option.label);
+
+    if (!option.correct) {
+      setCouponGameMessage("這題還差一點，Devin 的早餐店營業時間是 06:00-10:00。");
+      return;
+    }
+
+    const coupon = findBreakfastCoupon("SUNNY10");
+    void earnCoupon(
+      coupon.code,
+      "quiz",
+      `答對營業時間，拿到「${coupon.label}」`,
+    );
   }
 
   function updateCartItemCustomization(
@@ -993,7 +1188,7 @@ export default function App() {
           body: JSON.stringify({
             pickupAt: pickupDate.toISOString(),
             note: reservationNote.trim() || undefined,
-            couponCode: activeCoupon?.code,
+            couponId: selectedCoupon?.id,
           }),
         },
       );
@@ -1004,8 +1199,7 @@ export default function App() {
 
       resetCartState();
       setIsCartOpen(false);
-      await loadOrderHistory();
-      await loadOperationsData();
+      await Promise.all([loadOrderHistory(), loadUserCoupons(), loadOperationsData()]);
     } catch (submitError) {
       setActionError("送出訂單失敗，請稍後再試。");
       console.error(submitError);
@@ -1389,16 +1583,16 @@ export default function App() {
         {user && canAccessCurrentRoute && isCustomerRoute ? (
           <section className="mb-8 rounded-lg border border-warning/30 bg-gradient-to-br from-warning/15 via-base-100 to-success/10 p-4 shadow-sm">
             <div className="flex flex-col xl:flex-row gap-4 xl:items-stretch">
-              <div className="xl:w-72">
+              <div className="xl:w-80">
                 <p className="text-sm font-semibold text-warning">
-                  早餐優惠券
+                  早餐優惠券錢包
                 </p>
-                <h2 className="text-2xl font-bold mt-1">小遊戲拿折扣</h2>
+                <h2 className="text-2xl font-bold mt-1">小遊戲贏折扣</h2>
                 <p className="text-sm opacity-75 mt-2">{couponGameMessage}</p>
-                {activeCoupon ? (
+                {selectedCoupon ? (
                   <div className="mt-4 rounded-lg border border-success/40 bg-success/10 p-3">
-                    <p className="text-sm font-semibold">目前優惠券</p>
-                    <p className="text-lg font-bold">{activeCoupon.label}</p>
+                    <p className="text-sm font-semibold">目前選用優惠券</p>
+                    <p className="text-lg font-bold">{selectedCoupon.label}</p>
                     <p className="text-sm opacity-75">
                       本次訂單折抵 ${couponDiscount}
                     </p>
@@ -1406,38 +1600,146 @@ export default function App() {
                       type="button"
                       className="btn btn-xs btn-outline mt-3"
                       onClick={() => {
-                        setActiveCouponCode("");
-                        setCouponGameMessage(
-                          "玩一局小遊戲，早餐券會自動套用到這次訂單。",
-                        );
+                        setSelectedCouponId("");
                       }}
                     >
                       不使用優惠券
                     </button>
                   </div>
                 ) : null}
+                <div className="mt-3 max-h-32 overflow-auto rounded-lg border border-base-300 bg-base-100/60 p-2">
+                  <div className="mb-2 flex items-center justify-between text-sm">
+                    <span className="font-semibold">可用券</span>
+                    <span>{availableCoupons.length} 張</span>
+                  </div>
+                  {availableCoupons.length === 0 ? (
+                    <p className="text-sm opacity-70">
+                      還沒有可用優惠券，先玩一局。
+                    </p>
+                  ) : (
+                    <div className="grid gap-2">
+                      {availableCoupons.map((coupon) => (
+                        <button
+                          key={coupon.id}
+                          type="button"
+                          className={`btn btn-xs justify-between ${
+                            selectedCouponId === coupon.id
+                              ? "btn-success"
+                              : "btn-outline"
+                          }`}
+                          onClick={() => {
+                            setSelectedCouponId(coupon.id);
+                          }}
+                        >
+                          <span>{coupon.label}</span>
+                          <span>折 ${coupon.discount}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 flex-1">
-                {couponGameOptions.map((game) => (
-                  <article
-                    key={game.id}
-                    className="rounded-lg border border-base-300 bg-base-100/80 p-4"
-                  >
-                    <h3 className="font-bold">{game.title}</h3>
-                    <p className="text-sm opacity-75 min-h-12 mt-2">
-                      {game.description}
-                    </p>
+                <article className="rounded-lg border border-base-300 bg-base-100/80 p-4">
+                  <h3 className="font-bold">早餐記憶翻牌</h3>
+                  <p className="text-sm opacity-75 min-h-12 mt-2">
+                    找出兩組相同餐點。步數越少，折扣越高。
+                  </p>
+                  <div className="mt-3 grid grid-cols-4 gap-2">
+                    {memoryCards.map((card) => {
+                      const isVisible =
+                        flippedMemoryCardIds.includes(card.id) ||
+                        matchedMemoryCardIds.includes(card.id);
+                      return (
+                        <button
+                          key={card.id}
+                          type="button"
+                          className={`btn h-16 min-h-0 text-base ${
+                            matchedMemoryCardIds.includes(card.id)
+                              ? "btn-success"
+                              : isVisible
+                                ? "btn-warning"
+                                : "btn-outline"
+                          }`}
+                          onClick={() => {
+                            handleMemoryCardClick(card);
+                          }}
+                        >
+                          {isVisible ? card.label : "?"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-3 flex items-center justify-between text-sm">
+                    <span>步數 {memoryMoves}</span>
                     <button
                       type="button"
-                      className="btn btn-sm btn-warning w-full mt-4"
-                      onClick={() => {
-                        playCouponGame(game);
+                      className="btn btn-xs btn-outline"
+                      onClick={resetMemoryGame}
+                    >
+                      重開
+                    </button>
+                  </div>
+                </article>
+
+                <article className="rounded-lg border border-base-300 bg-base-100/80 p-4">
+                  <h3 className="font-bold">早餐幸運轉盤</h3>
+                  <p className="text-sm opacity-75 min-h-12 mt-2">
+                    轉盤停在哪一格，就把那張券存進錢包。
+                  </p>
+                  <div className="relative mx-auto mt-4 h-28 w-28">
+                    <div className="absolute left-1/2 top-[-0.35rem] z-10 -translate-x-1/2 text-warning">
+                      ▼
+                    </div>
+                    <div
+                      className="grid h-full w-full place-items-center rounded-full border-4 border-warning transition-transform duration-700 ease-out"
+                      style={{
+                        background:
+                          "conic-gradient(#fbbf24 0 120deg, #38bdf8 120deg 240deg, #34d399 240deg 360deg)",
+                        transform: `rotate(${wheelRotation}deg)`,
                       }}
                     >
-                      {game.actionLabel}
-                    </button>
-                  </article>
-                ))}
+                      <span className="rounded-full bg-base-100/90 px-3 py-1 text-xs font-bold">
+                        START
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-warning mt-4 w-full"
+                    disabled={isWheelSpinning}
+                    onClick={spinCouponWheel}
+                  >
+                    {isWheelSpinning ? "轉動中..." : "轉一下"}
+                  </button>
+                </article>
+
+                <article className="rounded-lg border border-base-300 bg-base-100/80 p-4">
+                  <h3 className="font-bold">營業時間快問快答</h3>
+                  <p className="text-sm opacity-75 min-h-12 mt-2">
+                    Devin 的早餐店營業時間是哪一段？
+                  </p>
+                  <div className="mt-3 grid gap-2">
+                    {quizOptions.map((option) => (
+                      <button
+                        key={option.label}
+                        type="button"
+                        className={`btn btn-sm ${
+                          quizAnswer === option.label
+                            ? option.correct
+                              ? "btn-success"
+                              : "btn-error"
+                            : "btn-outline"
+                        }`}
+                        onClick={() => {
+                          answerCouponQuiz(option);
+                        }}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </article>
               </div>
             </div>
           </section>
@@ -2228,6 +2530,31 @@ export default function App() {
                   disabled={cartDetails.length === 0 || isSubmittingOrder}
                 />
               </label>
+              <label className="form-control w-full">
+                <div className="label">
+                  <span className="label-text font-semibold">優惠券</span>
+                  <span className="label-text-alt">
+                    可用 {availableCoupons.length} 張
+                  </span>
+                </div>
+                <select
+                  className="select select-bordered"
+                  value={selectedCouponId}
+                  onChange={(event) => {
+                    setSelectedCouponId(
+                      event.target.value ? Number(event.target.value) : "",
+                    );
+                  }}
+                  disabled={cartDetails.length === 0 || isSubmittingOrder}
+                >
+                  <option value="">不使用優惠券</option>
+                  {availableCoupons.map((coupon) => (
+                    <option key={coupon.id} value={coupon.id}>
+                      {coupon.label}（折 ${coupon.discount}）
+                    </option>
+                  ))}
+                </select>
+              </label>
               <div className="flex items-center justify-between font-semibold">
                 <span>總件數</span>
                 <span>{cartItemCount}</span>
@@ -2236,9 +2563,9 @@ export default function App() {
                 <span>商品小計</span>
                 <span>${cartTotal}</span>
               </div>
-              {activeCoupon ? (
+              {selectedCoupon ? (
                 <div className="flex items-center justify-between text-success">
-                  <span>{activeCoupon.label}</span>
+                  <span>{selectedCoupon.label}</span>
                   <span>-${couponDiscount}</span>
                 </div>
               ) : null}

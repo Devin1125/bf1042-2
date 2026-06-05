@@ -66,6 +66,21 @@ export const roleRequestsTable = appSchema.table("role_requests", {
   reviewNote: text("review_note"),
 });
 
+export const userCouponsTable = appSchema.table("user_coupons", {
+  id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  code: text("code").notNull(),
+  label: text("label").notNull(),
+  discount: integer("discount").notNull(),
+  status: text("status").notNull().default("active"),
+  earnedFrom: text("earned_from").notNull(),
+  earnedAt: timestamp("earned_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  usedOrderId: integer("used_order_id").references(() => ordersTable.id),
+});
+
 export const orderItemsTable = appSchema.table(
   "order_items",
   {

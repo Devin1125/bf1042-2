@@ -57,6 +57,13 @@
       "when": 1780556077232,
       "tag": "0007_order_coupon_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1780556077233,
+      "tag": "0008_user_coupon_wallet",
+      "breakpoints": true
     }
   ]
 }
