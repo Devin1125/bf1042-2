@@ -50,6 +50,13 @@
       "when": 1780556077231,
       "tag": "0006_order_item_customization",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780556077232,
+      "tag": "0007_order_coupon_fields",
+      "breakpoints": true
     }
   ]
 }

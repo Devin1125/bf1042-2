@@ -42,6 +42,9 @@ export const ordersTable = appSchema.table("orders", {
     .notNull()
     .references(() => user.id),
   total: integer("total").notNull().default(0),
+  discount: integer("discount").notNull().default(0),
+  couponCode: text("coupon_code"),
+  couponLabel: text("coupon_label"),
   status: text("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   submittedAt: timestamp("submitted_at", { withTimezone: true }),

@@ -58,7 +58,16 @@ export interface Store {
   >;
   submitOrder(
     orderId: number,
-    input: { userId: string; pickupAt?: string; note?: string },
+    input: {
+      userId: string;
+      pickupAt?: string;
+      note?: string;
+      coupon?: {
+        code: string;
+        label: string;
+        discount: number;
+      };
+    },
   ): Promise<
     { ok: true; order: Order } | { ok: false; code: SubmitOrderErrorCode }
   >;

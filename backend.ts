@@ -40,6 +40,7 @@ import { createStore } from "./store/index.ts";
 import { auth, getCurrentUser } from "./auth/better-auth.ts";
 import { canAccessResource, hasAnyRole, requireAnyRole, requireRole } from "./shared/guards.ts";
 import type { AdminUser, Role, RoleRequest } from "./shared/contracts.ts";
+import { getBreakfastCouponByCode } from "./shared/coupons.ts";
 import { db } from "./db/client.ts";
 import { user as userTable } from "./db/auth-schema.ts";
 import { roleRequestsTable } from "./db/schema.ts";
@@ -53,6 +54,7 @@ const hasPublicAssets =
   existsSync("./public") && existsSync("./public/index.html");
 const businessOpenHour = 6;
 const businessCloseHour = 10;
+const reservationSlotStepMinutes = 10;
 const taipeiHourMinuteFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: "Asia/Taipei",
   hour: "2-digit",
@@ -94,6 +96,14 @@ function isWithinBusinessHoursTaipei(date: Date): boolean {
   return (
     minutes >= businessOpenHour * 60 &&
     minutes <= businessCloseHour * 60
+  );
+}
+
+function isTenMinuteReservationSlot(date: Date): boolean {
+  return (
+    date.getMinutes() % reservationSlotStepMinutes === 0 &&
+    date.getSeconds() === 0 &&
+    date.getMilliseconds() === 0
   );
 }
 
@@ -855,10 +865,24 @@ app.post(
       return { error: "Pickup time must be between 06:00 and 10:00 Asia/Taipei" };
     }
 
+    if (!isTenMinuteReservationSlot(pickupDate)) {
+      set.status = 400;
+      return { error: "Pickup time must use a 10-minute interval" };
+    }
+
+    const coupon = body.couponCode
+      ? getBreakfastCouponByCode(body.couponCode)
+      : undefined;
+    if (body.couponCode && !coupon) {
+      set.status = 400;
+      return { error: "Invalid coupon code" };
+    }
+
     const result = await store.submitOrder(orderId, {
       userId: user.id,
       pickupAt: body.pickupAt,
       note: trimmedNote ? trimmedNote : undefined,
+      ...(coupon ? { coupon } : {}),
     });
 
     if (!result.ok && result.code === "ORDER_NOT_FOUND") {

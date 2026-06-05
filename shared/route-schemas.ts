@@ -110,6 +110,7 @@ export const submitOrderBodySchema = z.object({
     return !Number.isNaN(pickupDate.getTime());
   }, "pickupAt must be a valid date time"),
   note: z.string().max(200).optional(),
+  couponCode: z.string().max(40).optional(),
 });
 
 /** POST /api/users/me/role-request */

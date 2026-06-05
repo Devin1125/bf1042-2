@@ -190,6 +190,18 @@ export class JsonFileStore implements Store {
                 ? orderItem.customization
                 : undefined,
           })),
+          discount:
+            typeof order.discount === "number" && order.discount > 0
+              ? order.discount
+              : 0,
+          couponCode:
+            typeof order.couponCode === "string" && order.couponCode.length > 0
+              ? order.couponCode
+              : undefined,
+          couponLabel:
+            typeof order.couponLabel === "string" && order.couponLabel.length > 0
+              ? order.couponLabel
+              : undefined,
           status: normalizeOrderStatus(order.status),
           submittedAt: order.status === "pending" ? undefined : order.submittedAt,
           pickupAt:
@@ -431,7 +443,16 @@ export class JsonFileStore implements Store {
 
   async submitOrder(
     orderId: number,
-    input: { userId: string; pickupAt?: string; note?: string },
+    input: {
+      userId: string;
+      pickupAt?: string;
+      note?: string;
+      coupon?: {
+        code: string;
+        label: string;
+        discount: number;
+      };
+    },
   ): Promise<
     | { ok: true; order: Order }
     | {
@@ -460,10 +481,17 @@ export class JsonFileStore implements Store {
       return { ok: false, code: "EMPTY_ORDER" };
     }
 
+    const subtotal = calculateOrderTotal(order.items);
+    const discount = Math.min(input.coupon?.discount ?? 0, subtotal);
+
     order.status = "submitted";
     order.submittedAt = new Date().toISOString();
     order.pickupAt = input.pickupAt ?? order.submittedAt;
     order.note = input.note;
+    order.discount = discount;
+    order.couponCode = input.coupon?.code;
+    order.couponLabel = input.coupon?.label;
+    order.total = Math.max(0, subtotal - discount);
     await this.persist();
 
     return { ok: true, order };

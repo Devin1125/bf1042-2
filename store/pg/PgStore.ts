@@ -26,6 +26,9 @@ interface SeedData {
     userId: string | number;
     status: "pending" | "submitted";
     total: number;
+    discount?: number;
+    couponCode?: string;
+    couponLabel?: string;
     createdAt: string;
     submittedAt?: string;
     pickupAt?: string;
@@ -333,7 +336,16 @@ export class PgStore implements Store {
 
   async submitOrder(
     orderId: number,
-    input: { userId: string; pickupAt?: string; note?: string },
+    input: {
+      userId: string;
+      pickupAt?: string;
+      note?: string;
+      coupon?: {
+        code: string;
+        label: string;
+        discount: number;
+      };
+    },
   ): Promise<
     | { ok: true; order: Order }
     | {
@@ -355,10 +367,17 @@ export class PgStore implements Store {
 
     const submittedAt = new Date().toISOString();
     const pickupAt = input.pickupAt ?? submittedAt;
+    const subtotal = calculateTotal(order.items);
+    const discount = Math.min(input.coupon?.discount ?? 0, subtotal);
+    const total = Math.max(0, subtotal - discount);
 
     await db
       .update(ordersTable)
       .set({
+        total,
+        discount,
+        couponCode: input.coupon?.code ?? null,
+        couponLabel: input.coupon?.label ?? null,
         status: "submitted",
         submittedAt: new Date(submittedAt),
         pickupAt: new Date(pickupAt),
@@ -370,6 +389,10 @@ export class PgStore implements Store {
     order.submittedAt = submittedAt;
     order.pickupAt = pickupAt;
     order.note = input.note;
+    order.discount = discount;
+    order.couponCode = input.coupon?.code;
+    order.couponLabel = input.coupon?.label;
+    order.total = total;
 
     return { ok: true, order };
   }
@@ -492,6 +515,9 @@ export class PgStore implements Store {
       userId: row.userId,
       items: itemsByOrderId.get(row.id) ?? [],
       total: row.total,
+      discount: row.discount,
+      couponCode: row.couponCode ?? undefined,
+      couponLabel: row.couponLabel ?? undefined,
       status: normalizeOrderStatus(row.status),
       createdAt:
         row.createdAt instanceof Date

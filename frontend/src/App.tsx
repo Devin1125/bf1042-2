@@ -10,18 +10,53 @@ import type {
   RoleRequest,
   SessionUser,
 } from "../../shared/contracts.ts";
+import {
+  breakfastCouponCatalog,
+  getBreakfastCouponByCode,
+  type BreakfastCoupon,
+} from "../../shared/coupons.ts";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 const reservationLeadTimeMinutes = 30;
 const businessOpenHour = 6;
 const businessCloseHour = 10;
-const reservationPresetOptions = [
-  { label: "開店", hour: 6, minute: 0 },
-  { label: "早餐", hour: 7, minute: 0 },
-  { label: "早餐", hour: 8, minute: 0 },
-  { label: "早餐", hour: 9, minute: 0 },
-  { label: "最後取餐", hour: 10, minute: 0 },
-];
+const reservationSlotStepMinutes = 10;
+const reservationSlotOptions = Array.from(
+  {
+    length:
+      ((businessCloseHour - businessOpenHour) * 60) /
+        reservationSlotStepMinutes +
+      1,
+  },
+  (_, index) => {
+    const totalMinutes =
+      businessOpenHour * 60 + index * reservationSlotStepMinutes;
+    return {
+      hour: Math.floor(totalMinutes / 60),
+      minute: totalMinutes % 60,
+    };
+  },
+);
+const couponGameOptions = [
+  {
+    id: "cards",
+    title: "翻早餐牌",
+    description: "翻出今天的早餐幸運牌，最高可拿 $20 折扣。",
+    actionLabel: "翻一張",
+  },
+  {
+    id: "spin",
+    title: "幸運轉盤",
+    description: "轉到紅茶、奶茶或蛋餅，拿一張早餐券。",
+    actionLabel: "轉一下",
+  },
+  {
+    id: "quiz",
+    title: "早餐快問快答",
+    description: "答對營業時間小題目，立刻拿優惠。",
+    actionLabel: "挑戰",
+  },
+] as const;
 
 function buildApiUrl(path: string) {
   return `${apiBaseUrl}${path}`;
@@ -51,9 +86,21 @@ function joinDateAndTime(dateValue: string, timeValue: string): string {
   return `${dateValue}T${timeValue}`;
 }
 
+function roundUpToReservationStep(date: Date): Date {
+  const rounded = new Date(date);
+  rounded.setSeconds(0, 0);
+  const remainder = rounded.getMinutes() % reservationSlotStepMinutes;
+  if (remainder > 0) {
+    rounded.setMinutes(
+      rounded.getMinutes() + reservationSlotStepMinutes - remainder,
+    );
+  }
+  return rounded;
+}
+
 function getDefaultPickupAtInputValue(): string {
-  const earliestPickupAt = new Date(
-    Date.now() + reservationLeadTimeMinutes * 60_000,
+  const earliestPickupAt = roundUpToReservationStep(
+    new Date(Date.now() + reservationLeadTimeMinutes * 60_000),
   );
   const openingAt = new Date(earliestPickupAt);
   openingAt.setHours(businessOpenHour, 0, 0, 0);
@@ -94,8 +141,7 @@ function isSameCalendarDate(left: Date, right: Date): boolean {
   );
 }
 
-function formatReservationPresetLabel(
-  label: string,
+function formatReservationSlotLabel(
   hour: number,
   minute: number,
   date: Date,
@@ -110,7 +156,7 @@ function formatReservationPresetLabel(
       : `${date.getMonth() + 1}/${date.getDate()}`;
   const timeLabel = `${padDatePart(hour)}:${padDatePart(minute)}`;
 
-  return `${dayLabel} ${label} ${timeLabel}`;
+  return `${dayLabel} ${timeLabel}`;
 }
 
 function formatOrderDateTime(isoString?: string): string {
@@ -141,6 +187,15 @@ function formatOrderItemText(detail: Order["items"][number]): string {
   }`;
 }
 
+function pickCouponForGame(gameId: string): BreakfastCoupon {
+  const gameOffset =
+    gameId === "cards" ? 0 : gameId === "spin" ? 1 : 2;
+  const index =
+    (Math.floor(Math.random() * breakfastCouponCatalog.length) + gameOffset) %
+    breakfastCouponCatalog.length;
+  return breakfastCouponCatalog[index];
+}
+
 export default function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [authError, setAuthError] = useState("");
@@ -167,6 +222,10 @@ export default function App() {
     getDefaultPickupAtInputValue(),
   );
   const [reservationNote, setReservationNote] = useState("");
+  const [activeCouponCode, setActiveCouponCode] = useState("");
+  const [couponGameMessage, setCouponGameMessage] = useState(
+    "玩一局小遊戲，早餐券會自動套用到這次訂單。",
+  );
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [roleRequests, setRoleRequests] = useState<RoleRequest[]>([]);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
@@ -225,6 +284,8 @@ export default function App() {
     setIsCartOpen(false);
     setReservationPickupAt(getDefaultPickupAtInputValue());
     setReservationNote("");
+    setActiveCouponCode("");
+    setCouponGameMessage("玩一局小遊戲，早餐券會自動套用到這次訂單。");
   }
 
   async function loadCurrentOrder(): Promise<Order | null> {
@@ -444,7 +505,7 @@ export default function App() {
   const defaultReservationTimeValue = `${padDatePart(businessOpenHour)}:00`;
   const reservationPresetSlots = useMemo(
     () =>
-      reservationPresetOptions.map((option) => {
+      reservationSlotOptions.map((option) => {
         const baseDateValue = reservationDateValue || reservationDateMin;
         const timeValue = `${padDatePart(option.hour)}:${padDatePart(option.minute)}`;
         const slot = new Date(joinDateAndTime(baseDateValue, timeValue));
@@ -452,17 +513,22 @@ export default function App() {
           ...option,
           value: joinDateAndTime(baseDateValue, timeValue),
           disabled: Number.isNaN(slot.getTime()) || !isReservationSlotAvailable(slot),
-          label: formatReservationPresetLabel(
-            option.label,
+          label: formatReservationSlotLabel(
             option.hour,
             option.minute,
             slot,
           ),
+          timeLabel: timeValue,
         };
       }),
     [reservationDateMin, reservationDateValue],
   );
   const reservationSummary = formatOrderDateTime(reservationPickupAt);
+  const activeCoupon = activeCouponCode
+    ? getBreakfastCouponByCode(activeCouponCode)
+    : undefined;
+  const couponDiscount = Math.min(activeCoupon?.discount ?? 0, cartTotal);
+  const payableCartTotal = Math.max(0, cartTotal - couponDiscount);
 
   const roleView = isKitchenRoute
     ? "chef"
@@ -815,6 +881,12 @@ export default function App() {
     await setCartItemQty(item, (cartQtyByItemId[item.id] ?? 0) + 1);
   }
 
+  function playCouponGame(game: (typeof couponGameOptions)[number]): void {
+    const coupon = pickCouponForGame(game.id);
+    setActiveCouponCode(coupon.code);
+    setCouponGameMessage(`${game.title} 成功獲得「${coupon.label}」。`);
+  }
+
   function updateCartItemCustomization(
     itemId: number,
     customization: string,
@@ -921,6 +993,7 @@ export default function App() {
           body: JSON.stringify({
             pickupAt: pickupDate.toISOString(),
             note: reservationNote.trim() || undefined,
+            couponCode: activeCoupon?.code,
           }),
         },
       );
@@ -1141,7 +1214,9 @@ export default function App() {
                 <div className="badge badge-secondary">
                   購物車 {cartItemCount} 件
                 </div>
-                <div className="badge badge-accent">總計 ${cartTotal}</div>
+                <div className="badge badge-accent">
+                  應付 ${payableCartTotal}
+                </div>
                 <div className="badge badge-outline">
                   取餐 {reservationSummary}
                 </div>
@@ -1281,13 +1356,13 @@ export default function App() {
                     }}
                   />
                   <span className="label-text-alt mt-2 opacity-70">
-                    營業時間 06:00-10:00，最晚取餐 10:00。
+                    營業時間 06:00-10:00，每 10 分鐘可預約一次。
                   </span>
                 </label>
               </div>
               <div className="lg:w-[28rem]">
                 <div className="text-sm font-semibold mb-2">取餐時段</div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <div className="grid max-h-44 grid-cols-3 gap-2 overflow-auto pr-1 sm:grid-cols-4 xl:grid-cols-5">
                   {reservationPresetSlots.map((slot) => (
                     <button
                       key={`${slot.hour}-${slot.minute}`}
@@ -1302,10 +1377,67 @@ export default function App() {
                         setReservationPickupAt(slot.value);
                       }}
                     >
-                      {slot.label}
+                      {slot.timeLabel}
                     </button>
                   ))}
                 </div>
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        {user && canAccessCurrentRoute && isCustomerRoute ? (
+          <section className="mb-8 rounded-lg border border-warning/30 bg-gradient-to-br from-warning/15 via-base-100 to-success/10 p-4 shadow-sm">
+            <div className="flex flex-col xl:flex-row gap-4 xl:items-stretch">
+              <div className="xl:w-72">
+                <p className="text-sm font-semibold text-warning">
+                  早餐優惠券
+                </p>
+                <h2 className="text-2xl font-bold mt-1">小遊戲拿折扣</h2>
+                <p className="text-sm opacity-75 mt-2">{couponGameMessage}</p>
+                {activeCoupon ? (
+                  <div className="mt-4 rounded-lg border border-success/40 bg-success/10 p-3">
+                    <p className="text-sm font-semibold">目前優惠券</p>
+                    <p className="text-lg font-bold">{activeCoupon.label}</p>
+                    <p className="text-sm opacity-75">
+                      本次訂單折抵 ${couponDiscount}
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-outline mt-3"
+                      onClick={() => {
+                        setActiveCouponCode("");
+                        setCouponGameMessage(
+                          "玩一局小遊戲，早餐券會自動套用到這次訂單。",
+                        );
+                      }}
+                    >
+                      不使用優惠券
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 flex-1">
+                {couponGameOptions.map((game) => (
+                  <article
+                    key={game.id}
+                    className="rounded-lg border border-base-300 bg-base-100/80 p-4"
+                  >
+                    <h3 className="font-bold">{game.title}</h3>
+                    <p className="text-sm opacity-75 min-h-12 mt-2">
+                      {game.description}
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-warning w-full mt-4"
+                      onClick={() => {
+                        playCouponGame(game);
+                      }}
+                    >
+                      {game.actionLabel}
+                    </button>
+                  </article>
+                ))}
               </div>
             </div>
           </section>
@@ -1345,14 +1477,30 @@ export default function App() {
                   <option value="staff">店員</option>
                   <option value="chef">廚師</option>
                 </select>
-                <textarea
-                  className="textarea textarea-bordered min-h-24"
-                  value={roleRequestReason}
-                  onChange={(event) => {
-                    setRoleRequestReason(event.target.value);
-                  }}
-                  placeholder="申請原因"
-                />
+                <label className="form-control gap-2">
+                  <div className="label p-0">
+                    <span className="label-text font-semibold">
+                      申請原因需填寫 10 個字以上
+                    </span>
+                    <span
+                      className={`label-text-alt ${
+                        roleRequestReason.trim().length >= 10
+                          ? "text-success"
+                          : "text-warning"
+                      }`}
+                    >
+                      {roleRequestReason.trim().length}/10
+                    </span>
+                  </div>
+                  <textarea
+                    className="textarea textarea-bordered min-h-24"
+                    value={roleRequestReason}
+                    onChange={(event) => {
+                      setRoleRequestReason(event.target.value);
+                    }}
+                    placeholder="例如：我想協助櫃台處理訂單與取餐通知"
+                  />
+                </label>
                 <button
                   className="btn btn-outline"
                   onClick={() => {
@@ -1476,6 +1624,12 @@ export default function App() {
                         {order.note ? (
                           <div className="text-xs opacity-70 mt-1">
                             備註：{order.note}
+                          </div>
+                        ) : null}
+                        {order.couponLabel && order.discount ? (
+                          <div className="text-xs text-success mt-1">
+                            優惠券：{order.couponLabel}，折抵 $
+                            {order.discount}
                           </div>
                         ) : null}
                       </td>
@@ -1878,6 +2032,11 @@ export default function App() {
                       {order.note ? (
                         <p className="text-sm opacity-80">備註：{order.note}</p>
                       ) : null}
+                      {order.couponLabel && order.discount ? (
+                        <p className="text-sm text-success">
+                          優惠券：{order.couponLabel}，折抵 ${order.discount}
+                        </p>
+                      ) : null}
                       <ul className="text-sm list-disc pl-5 space-y-1">
                         {order.items.map((detail) => (
                           <li key={`${order.id}-${detail.item.id}`}>
@@ -1886,7 +2045,7 @@ export default function App() {
                         ))}
                       </ul>
                       <p className="font-bold text-right">
-                        總額 ${order.total}
+                        應付 ${order.total}
                       </p>
                     </div>
                   </article>
@@ -2028,9 +2187,9 @@ export default function App() {
                   disabled={cartDetails.length === 0 || isSubmittingOrder}
                 />
                 <span className="label-text-alt mt-2 opacity-70">
-                  營業時間 06:00-10:00，最晚取餐 10:00。
+                  營業時間 06:00-10:00，每 10 分鐘可預約一次。
                 </span>
-                <div className="grid grid-cols-2 gap-2 mt-3">
+                <div className="grid max-h-40 grid-cols-3 gap-2 overflow-auto pr-1 mt-3">
                   {reservationPresetSlots.map((slot) => (
                     <button
                       key={`drawer-${slot.hour}-${slot.minute}`}
@@ -2049,7 +2208,7 @@ export default function App() {
                         setReservationPickupAt(slot.value);
                       }}
                     >
-                      {slot.label}
+                      {slot.timeLabel}
                     </button>
                   ))}
                 </div>
@@ -2073,9 +2232,19 @@ export default function App() {
                 <span>總件數</span>
                 <span>{cartItemCount}</span>
               </div>
-              <div className="flex items-center justify-between text-lg font-bold">
-                <span>總金額</span>
+              <div className="flex items-center justify-between">
+                <span>商品小計</span>
                 <span>${cartTotal}</span>
+              </div>
+              {activeCoupon ? (
+                <div className="flex items-center justify-between text-success">
+                  <span>{activeCoupon.label}</span>
+                  <span>-${couponDiscount}</span>
+                </div>
+              ) : null}
+              <div className="flex items-center justify-between text-lg font-bold">
+                <span>應付金額</span>
+                <span>${payableCartTotal}</span>
               </div>
               <button
                 className="btn btn-error btn-outline w-full"
