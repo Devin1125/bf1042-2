@@ -1,6 +1,6 @@
 # 00_demo01 - V9 (Better Auth + Google OAuth)
 
-Devin的早餐店 - 完整版
+聯大資工早餐訂餐系統 - 完整版
 
 ## 專案概述
 
@@ -24,12 +24,7 @@ Devin的早餐店 - 完整版
 - ✅ Session-based 認證（HttpOnly cookies）
 - ✅ RBAC 角色權限、角色申請審核、使用者角色管理
 - ✅ 店員/廚師營運工作台、訂單狀態追蹤、營收摘要
-- ✅ 完整的預約點餐流程（購物車 → 調整份數 → 選擇取餐時間 → 送出 → 歷史記錄）
-- ✅ 每個購物車品項支援客製化備註（例如無糖少冰、不要醬）
-- ✅ 店內營業時間限制：06:00-10:00，取餐時段每 10 分鐘一格
-- ✅ 早餐優惠券小遊戲，折扣會隨訂單保存
-- ✅ 支援 $500 早餐吃到飽方案
-- ✅ 部署整合模式（單一 Node 運行）
+- ✅ 完整的訂單流程（購物車 → 送出 → 歷史記錄）
 
 ## V10 RBAC 權限系統
 
@@ -206,7 +201,7 @@ V10 使用獨立的 PostgreSQL schema (`bf_v10`)，包含以下資料表：
 | 資料表         | 說明                   | 關鍵欄位                           |
 | -------------- | ---------------------- | ---------------------------------- |
 | `menu_items`   | 菜單資料               | `id`, `name`, `price`, `category`  |
-| `orders`       | 訂單主表               | `id`, `user_id`, `total`, `status`, `pickup_at`, `note` |
+| `orders`       | 訂單主表               | `id`, `user_id`, `total`, `status` |
 | `order_items`  | 訂單項目               | `order_id`, `item_id`, `qty`       |
 | `user`         | Better Auth 用戶表     | `id`, `email`, `name`              |
 | `session`      | Better Auth 會話表     | `token`, `expires_at`              |
@@ -551,7 +546,7 @@ http://localhost:3000/swagger
 | `/api/orders`              | POST  | 建立訂單     | ✅     |
 | `/api/orders/current`      | GET   | 取得當前訂單 | ✅     |
 | `/api/orders/:id`          | PATCH | 更新訂單項目 | ✅     |
-| `/api/orders/:id/submit`   | POST  | 預約送出訂單 | ✅     |
+| `/api/orders/:id/submit`   | POST  | 送出訂單     | ✅     |
 | `/api/orders/history`      | GET   | 訂單歷史     | ✅     |
 
 ## 學習資源

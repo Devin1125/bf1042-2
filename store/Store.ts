@@ -1,9 +1,4 @@
-import type {
-  MenuItem,
-  Order,
-  OrderStatus,
-  UserCoupon,
-} from "../shared/contracts.ts";
+import type { MenuItem, Order, OrderStatus } from "../shared/contracts.ts";
 
 export type UpdateOrderItemErrorCode =
   | "ORDER_NOT_FOUND"
@@ -15,8 +10,7 @@ export type SubmitOrderErrorCode =
   | "ORDER_NOT_FOUND"
   | "ORDER_NOT_OWNED"
   | "ORDER_NOT_EDITABLE"
-  | "EMPTY_ORDER"
-  | "COUPON_NOT_FOUND";
+  | "EMPTY_ORDER";
 
 export type UpdateOrderStatusErrorCode =
   | "ORDER_NOT_FOUND"
@@ -45,15 +39,6 @@ export interface Store {
   ): Promise<MenuItem | null>;
   deleteMenuItem(menuId: number): Promise<MenuItem | null>;
 
-  getCouponsByUserId(userId: string): Promise<ReadonlyArray<UserCoupon>>;
-  createCoupon(input: {
-    userId: string;
-    code: string;
-    label: string;
-    discount: number;
-    earnedFrom: string;
-  }): Promise<UserCoupon>;
-
   getOrders(): ReadonlyArray<Order>;
   getOrdersByUserId(userId: string): ReadonlyArray<Order>;
   getCurrentOrderByUserId(userId: string): Order | undefined;
@@ -66,19 +51,13 @@ export interface Store {
       userId: string;
       itemId: number;
       qty: number;
-      customization?: string;
     },
   ): Promise<
     { ok: true; order: Order } | { ok: false; code: UpdateOrderItemErrorCode }
   >;
   submitOrder(
     orderId: number,
-    input: {
-      userId: string;
-      pickupAt?: string;
-      note?: string;
-      couponId?: number;
-    },
+    input: { userId: string },
   ): Promise<
     { ok: true; order: Order } | { ok: false; code: SubmitOrderErrorCode }
   >;

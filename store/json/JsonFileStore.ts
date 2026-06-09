@@ -4,7 +4,6 @@ import type {
   Order,
   OrderItem,
   OrderStatus,
-  UserCoupon,
 } from "../../shared/contracts.ts";
 import type { Store } from "../Store.ts";
 
@@ -19,11 +18,9 @@ interface DataStore {
   users: StoredUser[];
   menu: MenuItem[];
   orders: Order[];
-  coupons?: UserCoupon[];
   userIdCounter: number;
   menuIdCounter: number;
   orderIdCounter: number;
-  couponIdCounter?: number;
 }
 
 interface JsonFileStoreOptions {
@@ -62,15 +59,6 @@ const defaultMenu: MenuItem[] = [
     category: "餐點",
     description: "煎到微酥的蛋餅皮包裹煙燻培根與雞蛋，是經典台式早餐選擇。",
     image_url: "/imgs/menu/bacon-egg-roll.webp",
-  },
-  {
-    id: 5,
-    name: "早餐吃到飽",
-    price: 500,
-    category: "方案",
-    description: "預約時段內可享店內早餐吃到飽，適合想一次吃齊多種餐點的顧客。",
-    image_url:
-      "https://images.unsplash.com/photo-1533089860892-a7c6f0a88666?auto=format&fit=crop&w=800&q=80",
   },
 ];
 
@@ -145,11 +133,9 @@ export class JsonFileStore implements Store {
   private users: StoredUser[] = [];
   private menu: MenuItem[] = [];
   private orders: Order[] = [];
-  private coupons: UserCoupon[] = [];
   private userIdCounter = 0;
   private menuIdCounter = 0;
   private orderIdCounter = 0;
-  private couponIdCounter = 0;
   private persistQueue: Promise<void> = Promise.resolve();
 
   constructor(options: JsonFileStoreOptions) {
@@ -189,53 +175,13 @@ export class JsonFileStore implements Store {
           items: order.items.map((orderItem) => ({
             ...orderItem,
             item: normalizeMenuItem(orderItem.item),
-            customization:
-              typeof orderItem.customization === "string" &&
-              orderItem.customization.length > 0
-                ? orderItem.customization
-                : undefined,
           })),
-          discount:
-            typeof order.discount === "number" && order.discount > 0
-              ? order.discount
-              : 0,
-          couponCode:
-            typeof order.couponCode === "string" && order.couponCode.length > 0
-              ? order.couponCode
-              : undefined,
-          couponLabel:
-            typeof order.couponLabel === "string" && order.couponLabel.length > 0
-              ? order.couponLabel
-              : undefined,
           status: normalizeOrderStatus(order.status),
           submittedAt: order.status === "pending" ? undefined : order.submittedAt,
-          pickupAt:
-            typeof order.pickupAt === "string" && order.pickupAt.length > 0
-              ? order.pickupAt
-              : undefined,
-          note:
-            typeof order.note === "string" && order.note.length > 0
-              ? order.note
-              : undefined,
         })),
-        coupons: Array.isArray(parsed.coupons)
-          ? parsed.coupons.map((coupon) => ({
-              id: coupon.id,
-              userId: normalizeUserId(coupon.userId),
-              code: coupon.code,
-              label: coupon.label,
-              discount: coupon.discount,
-              status: coupon.status === "used" ? "used" : "active",
-              earnedFrom: coupon.earnedFrom,
-              earnedAt: coupon.earnedAt,
-              usedAt: coupon.usedAt,
-              usedOrderId: coupon.usedOrderId,
-            }))
-          : [],
         userIdCounter: parsed.userIdCounter ?? 0,
         menuIdCounter: parsed.menuIdCounter ?? 0,
         orderIdCounter: parsed.orderIdCounter ?? 0,
-        couponIdCounter: parsed.couponIdCounter ?? 0,
       });
     } catch (error) {
       console.warn("[store] load failed, fallback to initial store", error);
@@ -309,36 +255,6 @@ export class JsonFileStore implements Store {
     return removedMenuItem ?? null;
   }
 
-  async getCouponsByUserId(userId: string): Promise<ReadonlyArray<UserCoupon>> {
-    return this.coupons
-      .filter((coupon) => coupon.userId === userId)
-      .sort((a, b) => b.earnedAt.localeCompare(a.earnedAt));
-  }
-
-  async createCoupon(input: {
-    userId: string;
-    code: string;
-    label: string;
-    discount: number;
-    earnedFrom: string;
-  }): Promise<UserCoupon> {
-    const coupon: UserCoupon = {
-      id: ++this.couponIdCounter,
-      userId: input.userId,
-      code: input.code,
-      label: input.label,
-      discount: input.discount,
-      status: "active",
-      earnedFrom: input.earnedFrom,
-      earnedAt: new Date().toISOString(),
-    };
-
-    this.coupons.push(coupon);
-    await this.persist();
-
-    return coupon;
-  }
-
   getOrders(): ReadonlyArray<Order> {
     return this.orders;
   }
@@ -399,7 +315,6 @@ export class JsonFileStore implements Store {
       userId: string;
       itemId: number;
       qty: number;
-      customization?: string;
     },
   ): Promise<
     | { ok: true; order: Order }
@@ -433,7 +348,6 @@ export class JsonFileStore implements Store {
     const existingItemIndex = order.items.findIndex(
       (orderItem) => orderItem.item.id === input.itemId,
     );
-    const normalizedCustomization = input.customization?.trim();
 
     if (existingItemIndex !== -1) {
       const existingOrderItem = order.items[existingItemIndex];
@@ -442,22 +356,9 @@ export class JsonFileStore implements Store {
         order.items.splice(existingItemIndex, 1);
       } else if (existingOrderItem) {
         existingOrderItem.qty = input.qty;
-        if (input.customization !== undefined) {
-          existingOrderItem.customization =
-            normalizedCustomization && normalizedCustomization.length > 0
-              ? normalizedCustomization
-              : undefined;
-        }
       }
     } else if (input.qty > 0) {
-      order.items.push({
-        item: menuItem,
-        qty: input.qty,
-        customization:
-          normalizedCustomization && normalizedCustomization.length > 0
-            ? normalizedCustomization
-            : undefined,
-      });
+      order.items.push({ item: menuItem, qty: input.qty });
     }
 
     order.total = calculateOrderTotal(order.items);
@@ -493,12 +394,7 @@ export class JsonFileStore implements Store {
 
   async submitOrder(
     orderId: number,
-    input: {
-      userId: string;
-      pickupAt?: string;
-      note?: string;
-      couponId?: number;
-    },
+    input: { userId: string },
   ): Promise<
     | { ok: true; order: Order }
     | {
@@ -507,8 +403,7 @@ export class JsonFileStore implements Store {
           | "ORDER_NOT_FOUND"
           | "ORDER_NOT_OWNED"
           | "ORDER_NOT_EDITABLE"
-          | "EMPTY_ORDER"
-          | "COUPON_NOT_FOUND";
+          | "EMPTY_ORDER";
       }
   > {
     const order = this.orders.find((targetOrder) => targetOrder.id === orderId);
@@ -528,36 +423,8 @@ export class JsonFileStore implements Store {
       return { ok: false, code: "EMPTY_ORDER" };
     }
 
-    const subtotal = calculateOrderTotal(order.items);
-    const coupon = input.couponId
-      ? this.coupons.find(
-          (targetCoupon) =>
-            targetCoupon.id === input.couponId &&
-            targetCoupon.userId === input.userId &&
-            targetCoupon.status === "active",
-        )
-      : undefined;
-    if (input.couponId && !coupon) {
-      return { ok: false, code: "COUPON_NOT_FOUND" };
-    }
-
-    const discount = Math.min(coupon?.discount ?? 0, subtotal);
-    const submittedAt = new Date().toISOString();
-
     order.status = "submitted";
-    order.submittedAt = submittedAt;
-    order.pickupAt = input.pickupAt ?? order.submittedAt;
-    order.note = input.note;
-    order.discount = discount;
-    order.couponCode = coupon?.code;
-    order.couponLabel = coupon?.label;
-    order.total = Math.max(0, subtotal - discount);
-
-    if (coupon) {
-      coupon.status = "used";
-      coupon.usedAt = submittedAt;
-      coupon.usedOrderId = order.id;
-    }
+    order.submittedAt = new Date().toISOString();
     await this.persist();
 
     return { ok: true, order };
@@ -568,11 +435,9 @@ export class JsonFileStore implements Store {
       users: cloneDefaultUsers(),
       menu: cloneDefaultMenu(),
       orders: [],
-      coupons: [],
       userIdCounter: defaultUsers.length,
       menuIdCounter: defaultMenu.length,
       orderIdCounter: 0,
-      couponIdCounter: 0,
     };
   }
 
@@ -580,7 +445,6 @@ export class JsonFileStore implements Store {
     this.users = store.users;
     this.menu = store.menu;
     this.orders = store.orders;
-    this.coupons = store.coupons ?? [];
 
     const maxUserId = this.users.reduce((max, user) => {
       const asNumber = Number.parseInt(user.id, 10);
@@ -595,18 +459,10 @@ export class JsonFileStore implements Store {
       (max, order) => Math.max(max, order.id),
       0,
     );
-    const maxCouponId = this.coupons.reduce(
-      (max, coupon) => Math.max(max, coupon.id),
-      0,
-    );
 
     this.userIdCounter = Math.max(store.userIdCounter || 0, maxUserId);
     this.menuIdCounter = Math.max(store.menuIdCounter || 0, maxMenuId);
     this.orderIdCounter = Math.max(store.orderIdCounter || 0, maxOrderId);
-    this.couponIdCounter = Math.max(
-      store.couponIdCounter || 0,
-      maxCouponId,
-    );
   }
 
   private buildStoreSnapshot(): DataStore {
@@ -614,11 +470,9 @@ export class JsonFileStore implements Store {
       users: this.users,
       menu: this.menu,
       orders: this.orders,
-      coupons: this.coupons,
       userIdCounter: this.userIdCounter,
       menuIdCounter: this.menuIdCounter,
       orderIdCounter: this.orderIdCounter,
-      couponIdCounter: this.couponIdCounter,
     };
   }
 

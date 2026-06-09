@@ -21,7 +21,7 @@ const appSchema = pgSchema(schemaName);
 
 // 對照 shared/contracts.ts：
 //   MenuItem { id, name, price, category, description, image_url }
-//   Order { id, userId: string, total, status, createdAt, submittedAt, pickupAt, note }
+//   Order { id, userId: string, total, status, createdAt, submittedAt }
 //   OrderItem { item: MenuItem, qty }  → order_items（反正規化）
 //
 // V9 設計：userId 直接對應 Better Auth 的 user.id（text PK）
@@ -42,14 +42,9 @@ export const ordersTable = appSchema.table("orders", {
     .notNull()
     .references(() => user.id),
   total: integer("total").notNull().default(0),
-  discount: integer("discount").notNull().default(0),
-  couponCode: text("coupon_code"),
-  couponLabel: text("coupon_label"),
   status: text("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   submittedAt: timestamp("submitted_at", { withTimezone: true }),
-  pickupAt: timestamp("pickup_at", { withTimezone: true }),
-  note: text("note"),
 });
 
 export const roleRequestsTable = appSchema.table("role_requests", {
@@ -66,21 +61,6 @@ export const roleRequestsTable = appSchema.table("role_requests", {
   reviewNote: text("review_note"),
 });
 
-export const userCouponsTable = appSchema.table("user_coupons", {
-  id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
-  code: text("code").notNull(),
-  label: text("label").notNull(),
-  discount: integer("discount").notNull(),
-  status: text("status").notNull().default("active"),
-  earnedFrom: text("earned_from").notNull(),
-  earnedAt: timestamp("earned_at", { withTimezone: true }).notNull(),
-  usedAt: timestamp("used_at", { withTimezone: true }),
-  usedOrderId: integer("used_order_id").references(() => ordersTable.id),
-});
-
 export const orderItemsTable = appSchema.table(
   "order_items",
   {
@@ -95,7 +75,6 @@ export const orderItemsTable = appSchema.table(
     description: text("description").notNull(),
     imageUrl: text("image_url").notNull(),
     qty: integer("qty").notNull(),
-    customization: text("customization"),
   },
   (table) => ({
     orderItemUniqueIdx: uniqueIndex("order_items_order_item_idx").on(

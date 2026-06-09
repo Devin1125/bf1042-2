@@ -4,14 +4,12 @@ import type {
   Order,
   OrderItem,
   OrderStatus,
-  UserCoupon,
 } from "../../shared/contracts.ts";
 import { db } from "../../db/client.ts";
 import {
   menuItemsTable,
   orderItemsTable,
   ordersTable,
-  userCouponsTable,
 } from "../../db/schema.ts";
 import type { Store } from "../Store.ts";
 
@@ -28,13 +26,8 @@ interface SeedData {
     userId: string | number;
     status: "pending" | "submitted";
     total: number;
-    discount?: number;
-    couponCode?: string;
-    couponLabel?: string;
     createdAt: string;
     submittedAt?: string;
-    pickupAt?: string;
-    note?: string;
     items: Array<{ item: MenuItem; qty: number }>;
   }>;
 }
@@ -161,43 +154,6 @@ export class PgStore implements Store {
     return removedItem;
   }
 
-  async getCouponsByUserId(userId: string): Promise<ReadonlyArray<UserCoupon>> {
-    const rows = await db
-      .select()
-      .from(userCouponsTable)
-      .where(eq(userCouponsTable.userId, userId))
-      .orderBy(desc(userCouponsTable.earnedAt), desc(userCouponsTable.id));
-
-    return rows.map(toUserCoupon);
-  }
-
-  async createCoupon(input: {
-    userId: string;
-    code: string;
-    label: string;
-    discount: number;
-    earnedFrom: string;
-  }): Promise<UserCoupon> {
-    const [inserted] = await db
-      .insert(userCouponsTable)
-      .values({
-        userId: input.userId,
-        code: input.code,
-        label: input.label,
-        discount: input.discount,
-        status: "active",
-        earnedFrom: input.earnedFrom,
-        earnedAt: new Date(),
-      })
-      .returning();
-
-    if (!inserted) {
-      throw new Error("Failed to create coupon");
-    }
-
-    return toUserCoupon(inserted);
-  }
-
   // ── Orders ──────────────────────────────────────────────────
 
   getOrders(): ReadonlyArray<Order> {
@@ -264,12 +220,7 @@ export class PgStore implements Store {
 
   async updateOrderItem(
     orderId: number,
-    input: {
-      userId: string;
-      itemId: number;
-      qty: number;
-      customization?: string;
-    },
+    input: { userId: string; itemId: number; qty: number },
   ): Promise<
     | { ok: true; order: Order }
     | {
@@ -294,7 +245,6 @@ export class PgStore implements Store {
     const existingIdx = order.items.findIndex(
       (oi) => oi.item.id === input.itemId,
     );
-    const normalizedCustomization = input.customization?.trim();
 
     if (existingIdx !== -1) {
       if (input.qty === 0) {
@@ -308,20 +258,9 @@ export class PgStore implements Store {
           );
         order.items.splice(existingIdx, 1);
       } else {
-        const updatePatch: {
-          qty: number;
-          customization?: string | null;
-        } = { qty: input.qty };
-        if (input.customization !== undefined) {
-          updatePatch.customization =
-            normalizedCustomization && normalizedCustomization.length > 0
-              ? normalizedCustomization
-              : null;
-        }
-
         await db
           .update(orderItemsTable)
-          .set(updatePatch)
+          .set({ qty: input.qty })
           .where(
             and(
               eq(orderItemsTable.orderId, orderId),
@@ -329,15 +268,7 @@ export class PgStore implements Store {
             ),
           );
         const target = order.items[existingIdx];
-        if (target) {
-          target.qty = input.qty;
-          if (input.customization !== undefined) {
-            target.customization =
-              normalizedCustomization && normalizedCustomization.length > 0
-                ? normalizedCustomization
-                : undefined;
-          }
-        }
+        if (target) target.qty = input.qty;
       }
     } else if (input.qty > 0) {
       await db.insert(orderItemsTable).values({
@@ -349,19 +280,8 @@ export class PgStore implements Store {
         description: menuItem.description,
         imageUrl: menuItem.image_url,
         qty: input.qty,
-        customization:
-          normalizedCustomization && normalizedCustomization.length > 0
-            ? normalizedCustomization
-            : null,
       });
-      order.items.push({
-        item: { ...menuItem },
-        qty: input.qty,
-        customization:
-          normalizedCustomization && normalizedCustomization.length > 0
-            ? normalizedCustomization
-            : undefined,
-      });
+      order.items.push({ item: { ...menuItem }, qty: input.qty });
     }
 
     order.total = calculateTotal(order.items);
@@ -375,12 +295,7 @@ export class PgStore implements Store {
 
   async submitOrder(
     orderId: number,
-    input: {
-      userId: string;
-      pickupAt?: string;
-      note?: string;
-      couponId?: number;
-    },
+    input: { userId: string },
   ): Promise<
     | { ok: true; order: Order }
     | {
@@ -389,8 +304,7 @@ export class PgStore implements Store {
           | "ORDER_NOT_FOUND"
           | "ORDER_NOT_OWNED"
           | "ORDER_NOT_EDITABLE"
-          | "EMPTY_ORDER"
-          | "COUPON_NOT_FOUND";
+          | "EMPTY_ORDER";
       }
   > {
     const order = this.orders.find((o) => o.id === orderId);
@@ -402,65 +316,14 @@ export class PgStore implements Store {
     if (order.items.length === 0) return { ok: false, code: "EMPTY_ORDER" };
 
     const submittedAt = new Date().toISOString();
-    const pickupAt = input.pickupAt ?? submittedAt;
-    const subtotal = calculateTotal(order.items);
-    let couponRow: typeof userCouponsTable.$inferSelect | undefined;
-
-    if (input.couponId) {
-      const [matchedCoupon] = await db
-        .select()
-        .from(userCouponsTable)
-        .where(
-          and(
-            eq(userCouponsTable.id, input.couponId),
-            eq(userCouponsTable.userId, input.userId),
-            eq(userCouponsTable.status, "active"),
-          ),
-        )
-        .limit(1);
-      couponRow = matchedCoupon;
-    }
-
-    if (input.couponId && !couponRow) {
-      return { ok: false, code: "COUPON_NOT_FOUND" };
-    }
-
-    const discount = Math.min(couponRow?.discount ?? 0, subtotal);
-    const total = Math.max(0, subtotal - discount);
 
     await db
       .update(ordersTable)
-      .set({
-        total,
-        discount,
-        couponCode: couponRow?.code ?? null,
-        couponLabel: couponRow?.label ?? null,
-        status: "submitted",
-        submittedAt: new Date(submittedAt),
-        pickupAt: new Date(pickupAt),
-        note: input.note ?? null,
-      })
+      .set({ status: "submitted", submittedAt: new Date(submittedAt) })
       .where(eq(ordersTable.id, orderId));
 
     order.status = "submitted";
     order.submittedAt = submittedAt;
-    order.pickupAt = pickupAt;
-    order.note = input.note;
-    order.discount = discount;
-    order.couponCode = couponRow?.code;
-    order.couponLabel = couponRow?.label;
-    order.total = total;
-
-    if (couponRow) {
-      await db
-        .update(userCouponsTable)
-        .set({
-          status: "used",
-          usedAt: new Date(submittedAt),
-          usedOrderId: order.id,
-        })
-        .where(eq(userCouponsTable.id, couponRow.id));
-    }
 
     return { ok: true, order };
   }
@@ -573,7 +436,6 @@ export class PgStore implements Store {
           image_url: row.imageUrl,
         },
         qty: row.qty,
-        customization: row.customization ?? undefined,
       });
       itemsByOrderId.set(row.orderId, items);
     }
@@ -583,9 +445,6 @@ export class PgStore implements Store {
       userId: row.userId,
       items: itemsByOrderId.get(row.id) ?? [],
       total: row.total,
-      discount: row.discount,
-      couponCode: row.couponCode ?? undefined,
-      couponLabel: row.couponLabel ?? undefined,
       status: normalizeOrderStatus(row.status),
       createdAt:
         row.createdAt instanceof Date
@@ -596,12 +455,6 @@ export class PgStore implements Store {
           ? row.submittedAt.toISOString()
           : new Date(row.submittedAt).toISOString()
         : undefined,
-      pickupAt: row.pickupAt
-        ? row.pickupAt instanceof Date
-          ? row.pickupAt.toISOString()
-          : new Date(row.pickupAt).toISOString()
-        : undefined,
-      note: row.note ?? undefined,
     }));
   }
 }
@@ -618,28 +471,4 @@ function normalizeOrderStatus(status: string): OrderStatus {
   }
 
   return "pending";
-}
-
-function toUserCoupon(
-  row: typeof userCouponsTable.$inferSelect,
-): UserCoupon {
-  return {
-    id: row.id,
-    userId: row.userId,
-    code: row.code,
-    label: row.label,
-    discount: row.discount,
-    status: row.status === "used" ? "used" : "active",
-    earnedFrom: row.earnedFrom,
-    earnedAt:
-      row.earnedAt instanceof Date
-        ? row.earnedAt.toISOString()
-        : new Date(row.earnedAt).toISOString(),
-    usedAt: row.usedAt
-      ? row.usedAt instanceof Date
-        ? row.usedAt.toISOString()
-        : new Date(row.usedAt).toISOString()
-      : undefined,
-    usedOrderId: row.usedOrderId ?? undefined,
-  };
 }

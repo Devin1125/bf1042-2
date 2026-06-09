@@ -9,194 +9,12 @@ import type {
   Role,
   RoleRequest,
   SessionUser,
-  UserCoupon,
 } from "../../shared/contracts.ts";
-import {
-  breakfastCouponCatalog,
-  type BreakfastCoupon,
-} from "../../shared/coupons.ts";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-const reservationLeadTimeMinutes = 30;
-const businessOpenHour = 6;
-const businessCloseHour = 10;
-const reservationSlotStepMinutes = 10;
-const reservationSlotOptions = Array.from(
-  {
-    length:
-      ((businessCloseHour - businessOpenHour) * 60) /
-        reservationSlotStepMinutes +
-      1,
-  },
-  (_, index) => {
-    const totalMinutes =
-      businessOpenHour * 60 + index * reservationSlotStepMinutes;
-    return {
-      hour: Math.floor(totalMinutes / 60),
-      minute: totalMinutes % 60,
-    };
-  },
-);
-type CouponGameSource = "memory" | "wheel" | "quiz";
-type MemoryCard = {
-  id: number;
-  value: string;
-  label: string;
-};
-
-const memoryCardPairs = [
-  { value: "toast", label: "吐司" },
-  { value: "milk-tea", label: "奶茶" },
-] as const;
-const quizOptions = [
-  { label: "06:00-09:00", correct: false },
-  { label: "06:00-10:00", correct: true },
-  { label: "07:00-12:00", correct: false },
-] as const;
 
 function buildApiUrl(path: string) {
   return `${apiBaseUrl}${path}`;
-}
-
-function padDatePart(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
-function toDateInputValue(date: Date): string {
-  return [
-    date.getFullYear(),
-    padDatePart(date.getMonth() + 1),
-    padDatePart(date.getDate()),
-  ].join("-");
-}
-
-function toDateTimeLocalInputValue(date: Date): string {
-  return `${toDateInputValue(date)}T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
-}
-
-function joinDateAndTime(dateValue: string, timeValue: string): string {
-  if (!dateValue || !timeValue) {
-    return "";
-  }
-
-  return `${dateValue}T${timeValue}`;
-}
-
-function roundUpToReservationStep(date: Date): Date {
-  const rounded = new Date(date);
-  rounded.setSeconds(0, 0);
-  const remainder = rounded.getMinutes() % reservationSlotStepMinutes;
-  if (remainder > 0) {
-    rounded.setMinutes(
-      rounded.getMinutes() + reservationSlotStepMinutes - remainder,
-    );
-  }
-  return rounded;
-}
-
-function getDefaultPickupAtInputValue(): string {
-  const earliestPickupAt = roundUpToReservationStep(
-    new Date(Date.now() + reservationLeadTimeMinutes * 60_000),
-  );
-  const openingAt = new Date(earliestPickupAt);
-  openingAt.setHours(businessOpenHour, 0, 0, 0);
-  const closingAt = new Date(earliestPickupAt);
-  closingAt.setHours(businessCloseHour, 0, 0, 0);
-
-  if (earliestPickupAt.getTime() < openingAt.getTime()) {
-    return toDateTimeLocalInputValue(openingAt);
-  }
-
-  if (earliestPickupAt.getTime() <= closingAt.getTime()) {
-    earliestPickupAt.setSeconds(0, 0);
-    return toDateTimeLocalInputValue(earliestPickupAt);
-  }
-
-  openingAt.setDate(openingAt.getDate() + 1);
-  return toDateTimeLocalInputValue(openingAt);
-}
-
-function isWithinBusinessHours(date: Date): boolean {
-  const minutes = date.getHours() * 60 + date.getMinutes();
-  return (
-    minutes >= businessOpenHour * 60 &&
-    minutes <= businessCloseHour * 60
-  );
-}
-
-function isReservationSlotAvailable(date: Date): boolean {
-  const earliestPickupAt = Date.now() + reservationLeadTimeMinutes * 60_000;
-  return isWithinBusinessHours(date) && date.getTime() >= earliestPickupAt;
-}
-
-function isSameCalendarDate(left: Date, right: Date): boolean {
-  return (
-    left.getFullYear() === right.getFullYear() &&
-    left.getMonth() === right.getMonth() &&
-    left.getDate() === right.getDate()
-  );
-}
-
-function formatReservationSlotLabel(
-  hour: number,
-  minute: number,
-  date: Date,
-): string {
-  const today = new Date();
-  const tomorrow = new Date();
-  tomorrow.setDate(today.getDate() + 1);
-  const dayLabel = isSameCalendarDate(date, today)
-    ? "今天"
-    : isSameCalendarDate(date, tomorrow)
-      ? "明天"
-      : `${date.getMonth() + 1}/${date.getDate()}`;
-  const timeLabel = `${padDatePart(hour)}:${padDatePart(minute)}`;
-
-  return `${dayLabel} ${timeLabel}`;
-}
-
-function formatOrderDateTime(isoString?: string): string {
-  if (!isoString) {
-    return "未指定";
-  }
-
-  const date = new Date(isoString);
-  if (Number.isNaN(date.getTime())) {
-    return isoString;
-  }
-
-  return new Intl.DateTimeFormat("zh-TW", {
-    timeZone: "Asia/Taipei",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
-}
-
-function formatOrderItemText(detail: Order["items"][number]): string {
-  const customization = detail.customization?.trim();
-  return `${detail.item.name} x${detail.qty}${
-    customization ? `（${customization}）` : ""
-  }`;
-}
-
-function createMemoryCards(): MemoryCard[] {
-  return [...memoryCardPairs, ...memoryCardPairs]
-    .sort(() => Math.random() - 0.5)
-    .map((card, index) => ({
-      ...card,
-      id: index,
-    }));
-}
-
-function findBreakfastCoupon(couponCode: BreakfastCoupon["code"]) {
-  return (
-    breakfastCouponCatalog.find((coupon) => coupon.code === couponCode) ??
-    breakfastCouponCatalog[0]
-  );
 }
 
 export default function App() {
@@ -212,37 +30,12 @@ export default function App() {
   const [cartQtyByItemId, setCartQtyByItemId] = useState<
     Record<number, number>
   >({});
-  const [cartCustomizationByItemId, setCartCustomizationByItemId] = useState<
-    Record<number, string>
-  >({});
   const [cartTotal, setCartTotal] = useState(0);
   const [activeItemId, setActiveItemId] = useState<number | null>(null);
   const [actionError, setActionError] = useState("");
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isClearingCart, setIsClearingCart] = useState(false);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
-  const [reservationPickupAt, setReservationPickupAt] = useState(() =>
-    getDefaultPickupAtInputValue(),
-  );
-  const [reservationNote, setReservationNote] = useState("");
-  const [userCoupons, setUserCoupons] = useState<UserCoupon[]>([]);
-  const [selectedCouponId, setSelectedCouponId] = useState<number | "">("");
-  const [couponGameMessage, setCouponGameMessage] = useState(
-    "玩一局小遊戲，贏到的早餐券會存進優惠券錢包。",
-  );
-  const [memoryCards, setMemoryCards] = useState<MemoryCard[]>(() =>
-    createMemoryCards(),
-  );
-  const [flippedMemoryCardIds, setFlippedMemoryCardIds] = useState<number[]>(
-    [],
-  );
-  const [matchedMemoryCardIds, setMatchedMemoryCardIds] = useState<number[]>(
-    [],
-  );
-  const [memoryMoves, setMemoryMoves] = useState(0);
-  const [wheelRotation, setWheelRotation] = useState(0);
-  const [isWheelSpinning, setIsWheelSpinning] = useState(false);
-  const [quizAnswer, setQuizAnswer] = useState("");
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [roleRequests, setRoleRequests] = useState<RoleRequest[]>([]);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
@@ -277,32 +70,16 @@ export default function App() {
       },
       {} as Record<number, number>,
     );
-    const nextCustomizationByItemId = order.items.reduce(
-      (acc, orderItem) => {
-        const customization = orderItem.customization?.trim();
-        if (customization) {
-          acc[orderItem.item.id] = customization;
-        }
-        return acc;
-      },
-      {} as Record<number, string>,
-    );
 
     setCartQtyByItemId(nextQtyByItemId);
-    setCartCustomizationByItemId(nextCustomizationByItemId);
     setCartTotal(order.total);
   }
 
   function resetCartState() {
     setOrderId(null);
     setCartQtyByItemId({});
-    setCartCustomizationByItemId({});
     setCartTotal(0);
     setIsCartOpen(false);
-    setReservationPickupAt(getDefaultPickupAtInputValue());
-    setReservationNote("");
-    setSelectedCouponId("");
-    setCouponGameMessage("玩一局小遊戲，贏到的早餐券會存進優惠券錢包。");
   }
 
   async function loadCurrentOrder(): Promise<Order | null> {
@@ -346,36 +123,8 @@ export default function App() {
     }
   }
 
-  async function loadUserCoupons(): Promise<void> {
-    const response = await fetch(buildApiUrl("/api/coupons"), {
-      credentials: "include",
-    });
-
-    if (!response.ok) {
-      throw new Error(`Load coupons failed: HTTP ${response.status}`);
-    }
-
-    const payload = (await response.json()) as ApiDataResponse<UserCoupon[]>;
-    const coupons = Array.isArray(payload?.data) ? payload.data : [];
-
-    setUserCoupons(coupons);
-    setSelectedCouponId((currentCouponId) => {
-      if (
-        currentCouponId !== "" &&
-        coupons.some(
-          (coupon) =>
-            coupon.id === currentCouponId && coupon.status === "active",
-        )
-      ) {
-        return currentCouponId;
-      }
-
-      return "";
-    });
-  }
-
   async function refreshUserOrders(): Promise<void> {
-    await Promise.all([loadCurrentOrder(), loadOrderHistory(), loadUserCoupons()]);
+    await Promise.all([loadCurrentOrder(), loadOrderHistory()]);
   }
 
   useEffect(() => {
@@ -476,8 +225,6 @@ export default function App() {
       setAllOrders([]);
       setRoleRequests([]);
       setAdminUsers([]);
-      setUserCoupons([]);
-      setSelectedCouponId("");
       setIsCartOpen(false);
       resetCartState();
       return;
@@ -536,51 +283,11 @@ export default function App() {
           itemId,
           qty,
           item,
-          customization: cartCustomizationByItemId[itemId] ?? "",
           subtotal: item.price * qty,
         };
       })
       .filter((entry) => entry !== null);
-  }, [cartCustomizationByItemId, cartQtyByItemId, items]);
-
-  const reservationDateMin = useMemo(
-    () => toDateInputValue(new Date()),
-    [],
-  );
-  const reservationDateValue = reservationPickupAt.slice(0, 10);
-  const reservationTimeValue = reservationPickupAt.slice(11, 16);
-  const defaultReservationTimeValue = `${padDatePart(businessOpenHour)}:00`;
-  const reservationPresetSlots = useMemo(
-    () =>
-      reservationSlotOptions.map((option) => {
-        const baseDateValue = reservationDateValue || reservationDateMin;
-        const timeValue = `${padDatePart(option.hour)}:${padDatePart(option.minute)}`;
-        const slot = new Date(joinDateAndTime(baseDateValue, timeValue));
-        return {
-          ...option,
-          value: joinDateAndTime(baseDateValue, timeValue),
-          disabled: Number.isNaN(slot.getTime()) || !isReservationSlotAvailable(slot),
-          label: formatReservationSlotLabel(
-            option.hour,
-            option.minute,
-            slot,
-          ),
-          timeLabel: timeValue,
-        };
-      }),
-    [reservationDateMin, reservationDateValue],
-  );
-  const reservationSummary = formatOrderDateTime(reservationPickupAt);
-  const availableCoupons = useMemo(
-    () => userCoupons.filter((coupon) => coupon.status === "active"),
-    [userCoupons],
-  );
-  const selectedCoupon =
-    selectedCouponId === ""
-      ? undefined
-      : availableCoupons.find((coupon) => coupon.id === selectedCouponId);
-  const couponDiscount = Math.min(selectedCoupon?.discount ?? 0, cartTotal);
-  const payableCartTotal = Math.max(0, cartTotal - couponDiscount);
+  }, [cartQtyByItemId, items]);
 
   const roleView = isKitchenRoute
     ? "chef"
@@ -812,12 +519,7 @@ export default function App() {
     resetCartState();
   }
 
-  async function setCartItemQty(
-    item: MenuItem,
-    qty: number,
-    customization?: string,
-  ): Promise<void> {
-    const nextQty = Math.max(0, Math.trunc(qty));
+  async function addToCart(item: MenuItem): Promise<void> {
     setActionError("");
     setActiveItemId(item.id);
 
@@ -826,29 +528,20 @@ export default function App() {
         throw new Error("Please login first");
       }
 
-      if (orderId === null && nextQty === 0) {
-        return;
-      }
-
       const patchOrderItem = async (
         targetOrderId: number,
-        targetQty: number,
+        qty: number,
       ): Promise<Order> => {
-        const requestBody = {
-          itemId: item.id,
-          qty: targetQty,
-          ...(customization !== undefined
-            ? { customization: customization.trim() }
-            : {}),
-        };
-
         const response = await fetch(
           buildApiUrl(`/api/orders/${targetOrderId}`),
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             credentials: "include",
-            body: JSON.stringify(requestBody),
+            body: JSON.stringify({
+              itemId: item.id,
+              qty,
+            }),
           },
         );
 
@@ -867,6 +560,8 @@ export default function App() {
       };
 
       const targetOrderId = await ensureOrder();
+      const currentQty = cartQtyByItemId[item.id] ?? 0;
+      const nextQty = currentQty + 1;
 
       try {
         const updatedOrder = await patchOrderItem(targetOrderId, nextQty);
@@ -883,13 +578,14 @@ export default function App() {
           setOrderId(null);
 
           const recoveredOrder = await loadCurrentOrder();
-          if (!recoveredOrder && nextQty === 0) {
-            return;
-          }
-
           const retryOrderId = recoveredOrder?.id ?? (await ensureOrder());
+          const recoveredQty =
+            recoveredOrder?.items.find(
+              (orderItem) => orderItem.item.id === item.id,
+            )?.qty ?? 0;
+          const retryQty = recoveredQty + 1;
 
-          const retriedOrder = await patchOrderItem(retryOrderId, nextQty);
+          const retriedOrder = await patchOrderItem(retryOrderId, retryQty);
           syncCartFromOrder(retriedOrder);
           return;
         }
@@ -911,10 +607,7 @@ export default function App() {
             (orderItem) => orderItem.item.id === item.id,
           )?.qty;
 
-          if (
-            (nextQty === 0 && !recoveredQty) ||
-            (typeof recoveredQty === "number" && recoveredQty === nextQty)
-          ) {
+          if (typeof recoveredQty === "number" && recoveredQty > 0) {
             return;
           }
         } catch (recoveryError) {
@@ -922,180 +615,11 @@ export default function App() {
         }
       }
 
-      setActionError("更新購物車數量失敗，請稍後再試。");
+      setActionError("加入購物車失敗，請稍後再試。");
       console.error(cartError);
     } finally {
       setActiveItemId(null);
     }
-  }
-
-  async function addToCart(item: MenuItem): Promise<void> {
-    await setCartItemQty(item, (cartQtyByItemId[item.id] ?? 0) + 1);
-  }
-
-  async function earnCoupon(
-    couponCode: BreakfastCoupon["code"],
-    earnedFrom: CouponGameSource,
-    gameResultMessage: string,
-  ): Promise<void> {
-    if (!user) {
-      setCouponGameMessage("請先登入，贏到的優惠券才可以存進錢包。");
-      return;
-    }
-
-    try {
-      const response = await fetch(buildApiUrl("/api/coupons/earn"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          couponCode,
-          earnedFrom,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Earn coupon failed: HTTP ${response.status}`);
-      }
-
-      const payload = (await response.json()) as ApiDataResponse<UserCoupon>;
-      if (!payload?.data) {
-        throw new Error("Earn coupon response missing data");
-      }
-
-      setUserCoupons((currentCoupons) => [
-        payload.data,
-        ...currentCoupons.filter((coupon) => coupon.id !== payload.data.id),
-      ]);
-      setSelectedCouponId(payload.data.id);
-      setCouponGameMessage(`${gameResultMessage} 已存進優惠券錢包。`);
-    } catch (couponError) {
-      setCouponGameMessage("優惠券儲存失敗，請稍後再玩一次。");
-      console.error(couponError);
-    }
-  }
-
-  function resetMemoryGame(): void {
-    setMemoryCards(createMemoryCards());
-    setFlippedMemoryCardIds([]);
-    setMatchedMemoryCardIds([]);
-    setMemoryMoves(0);
-  }
-
-  function handleMemoryCardClick(card: MemoryCard): void {
-    if (
-      matchedMemoryCardIds.includes(card.id) ||
-      flippedMemoryCardIds.includes(card.id) ||
-      flippedMemoryCardIds.length >= 2
-    ) {
-      return;
-    }
-
-    const nextFlippedCardIds = [...flippedMemoryCardIds, card.id];
-    setFlippedMemoryCardIds(nextFlippedCardIds);
-
-    if (nextFlippedCardIds.length < 2) {
-      return;
-    }
-
-    const nextMoveCount = memoryMoves + 1;
-    const [leftCardId, rightCardId] = nextFlippedCardIds;
-    const leftCard = memoryCards.find((targetCard) => targetCard.id === leftCardId);
-    const rightCard = memoryCards.find((targetCard) => targetCard.id === rightCardId);
-    setMemoryMoves(nextMoveCount);
-
-    if (leftCard && rightCard && leftCard.value === rightCard.value) {
-      const nextMatchedCardIds = [
-        ...matchedMemoryCardIds,
-        leftCardId,
-        rightCardId,
-      ];
-      setMatchedMemoryCardIds(nextMatchedCardIds);
-      setFlippedMemoryCardIds([]);
-
-      if (nextMatchedCardIds.length === memoryCards.length) {
-        const couponCode =
-          nextMoveCount <= 2
-            ? "FULLMORNING20"
-            : nextMoveCount <= 4
-              ? "MILKTEA15"
-              : "SUNNY10";
-        const coupon = findBreakfastCoupon(couponCode);
-        void earnCoupon(
-          coupon.code,
-          "memory",
-          `翻牌配對完成，${nextMoveCount} 步拿到「${coupon.label}」`,
-        );
-      }
-      return;
-    }
-
-    window.setTimeout(() => {
-      setFlippedMemoryCardIds((currentCardIds) =>
-        currentCardIds.includes(leftCardId) && currentCardIds.includes(rightCardId)
-          ? []
-          : currentCardIds,
-      );
-    }, 650);
-  }
-
-  function spinCouponWheel(): void {
-    if (!user) {
-      setCouponGameMessage("請先登入，贏到的優惠券才可以存進錢包。");
-      return;
-    }
-
-    if (isWheelSpinning) {
-      return;
-    }
-
-    const couponIndex = Math.floor(Math.random() * breakfastCouponCatalog.length);
-    const coupon = breakfastCouponCatalog[couponIndex];
-    setIsWheelSpinning(true);
-    setCouponGameMessage("幸運轉盤轉動中...");
-    setWheelRotation((currentRotation) => currentRotation + 720 + couponIndex * 120 + 28);
-
-    window.setTimeout(() => {
-      void earnCoupon(
-        coupon.code,
-        "wheel",
-        `幸運轉盤停在「${coupon.label}」`,
-      ).finally(() => {
-        setIsWheelSpinning(false);
-      });
-    }, 900);
-  }
-
-  function answerCouponQuiz(option: (typeof quizOptions)[number]): void {
-    setQuizAnswer(option.label);
-
-    if (!option.correct) {
-      setCouponGameMessage("這題還差一點，Devin 的早餐店營業時間是 06:00-10:00。");
-      return;
-    }
-
-    const coupon = findBreakfastCoupon("SUNNY10");
-    void earnCoupon(
-      coupon.code,
-      "quiz",
-      `答對營業時間，拿到「${coupon.label}」`,
-    );
-  }
-
-  function updateCartItemCustomization(
-    itemId: number,
-    customization: string,
-  ): void {
-    const limitedCustomization = customization.slice(0, 200);
-    setCartCustomizationByItemId((current) => {
-      const next = { ...current };
-      if (limitedCustomization.length === 0) {
-        delete next[itemId];
-      } else {
-        next[itemId] = limitedCustomization;
-      }
-      return next;
-    });
   }
 
   async function clearCart(): Promise<void> {
@@ -1124,7 +648,6 @@ export default function App() {
       }
 
       setCartQtyByItemId({});
-      setCartCustomizationByItemId({});
       setCartTotal(0);
     } catch (clearError) {
       setActionError("清空購物車失敗，請稍後再試。");
@@ -1140,56 +663,16 @@ export default function App() {
     }
 
     setActionError("");
-
-    const pickupDate = new Date(reservationPickupAt);
-    if (!reservationPickupAt || Number.isNaN(pickupDate.getTime())) {
-      setActionError("請選擇有效的預約取餐時段。");
-      return;
-    }
-
-    if (pickupDate.getTime() < Date.now() - 60_000) {
-      setActionError("預約取餐時段不能早於現在。");
-      return;
-    }
-
-    if (!isWithinBusinessHours(pickupDate)) {
-      setActionError("店內營業時間為 06:00-10:00，請選擇營業時間內的取餐時段。");
-      return;
-    }
-
     setIsSubmittingOrder(true);
 
     try {
-      for (const detail of cartDetails) {
-        const response = await fetch(buildApiUrl(`/api/orders/${orderId}`), {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            itemId: detail.itemId,
-            qty: detail.qty,
-            customization: detail.customization.trim(),
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(
-            `Save item customization failed: HTTP ${response.status}`,
-          );
-        }
-      }
-
       const response = await fetch(
         buildApiUrl(`/api/orders/${orderId}/submit`),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({
-            pickupAt: pickupDate.toISOString(),
-            note: reservationNote.trim() || undefined,
-            couponId: selectedCoupon?.id,
-          }),
+          body: JSON.stringify({}),
         },
       );
 
@@ -1199,7 +682,8 @@ export default function App() {
 
       resetCartState();
       setIsCartOpen(false);
-      await Promise.all([loadOrderHistory(), loadUserCoupons(), loadOperationsData()]);
+      await loadOrderHistory();
+      await loadOperationsData();
     } catch (submitError) {
       setActionError("送出訂單失敗，請稍後再試。");
       console.error(submitError);
@@ -1387,7 +871,7 @@ export default function App() {
               navigateTo("/");
             }}
           >
-            🌅 Devin的早餐店
+            🌅 聯大資工早餐菜單
           </button>
         </div>
         <div className="flex-none w-full md:w-auto">
@@ -1408,12 +892,7 @@ export default function App() {
                 <div className="badge badge-secondary">
                   購物車 {cartItemCount} 件
                 </div>
-                <div className="badge badge-accent">
-                  應付 ${payableCartTotal}
-                </div>
-                <div className="badge badge-outline">
-                  取餐 {reservationSummary}
-                </div>
+                <div className="badge badge-accent">總計 ${cartTotal}</div>
                 <button
                   className="btn btn-sm btn-outline"
                   onClick={() => {
@@ -1421,7 +900,7 @@ export default function App() {
                   }}
                   disabled={!user}
                 >
-                  送出訂單(購物車明細)
+                  購物車明細
                 </button>
               </>
             ) : null}
@@ -1521,230 +1000,6 @@ export default function App() {
           </div>
         ) : null}
 
-        {user && canAccessCurrentRoute && isCustomerRoute ? (
-          <section className="mb-8 bg-base-100 rounded-lg shadow-sm p-4">
-            <div className="flex flex-col lg:flex-row lg:items-end gap-4">
-              <div className="flex-1">
-                <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-                  <h2 className="text-xl font-bold">預約取餐</h2>
-                  <span className="badge badge-primary">
-                    {reservationSummary}
-                  </span>
-                </div>
-                <label className="form-control w-full">
-                  <span className="label-text font-semibold mb-2">
-                    取餐日期
-                  </span>
-                  <input
-                    type="date"
-                    className="input input-bordered w-full"
-                    value={reservationDateValue || reservationDateMin}
-                    min={reservationDateMin}
-                    onChange={(event) => {
-                      setReservationPickupAt(
-                        joinDateAndTime(
-                          event.target.value,
-                          reservationTimeValue || defaultReservationTimeValue,
-                        ),
-                      );
-                    }}
-                  />
-                  <span className="label-text-alt mt-2 opacity-70">
-                    營業時間 06:00-10:00，每 10 分鐘可預約一次。
-                  </span>
-                </label>
-              </div>
-              <div className="lg:w-[28rem]">
-                <div className="text-sm font-semibold mb-2">取餐時段</div>
-                <div className="grid max-h-44 grid-cols-3 gap-2 overflow-auto pr-1 sm:grid-cols-4 xl:grid-cols-5">
-                  {reservationPresetSlots.map((slot) => (
-                    <button
-                      key={`${slot.hour}-${slot.minute}`}
-                      type="button"
-                      className={`btn btn-sm ${
-                        reservationPickupAt === slot.value
-                          ? "btn-primary"
-                          : "btn-outline"
-                      }`}
-                      disabled={slot.disabled}
-                      onClick={() => {
-                        setReservationPickupAt(slot.value);
-                      }}
-                    >
-                      {slot.timeLabel}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </section>
-        ) : null}
-
-        {user && canAccessCurrentRoute && isCustomerRoute ? (
-          <section className="mb-8 rounded-lg border border-warning/30 bg-gradient-to-br from-warning/15 via-base-100 to-success/10 p-4 shadow-sm">
-            <div className="flex flex-col xl:flex-row gap-4 xl:items-stretch">
-              <div className="xl:w-80">
-                <p className="text-sm font-semibold text-warning">
-                  早餐優惠券錢包
-                </p>
-                <h2 className="text-2xl font-bold mt-1">小遊戲贏折扣</h2>
-                <p className="text-sm opacity-75 mt-2">{couponGameMessage}</p>
-                {selectedCoupon ? (
-                  <div className="mt-4 rounded-lg border border-success/40 bg-success/10 p-3">
-                    <p className="text-sm font-semibold">目前選用優惠券</p>
-                    <p className="text-lg font-bold">{selectedCoupon.label}</p>
-                    <p className="text-sm opacity-75">
-                      本次訂單折抵 ${couponDiscount}
-                    </p>
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-outline mt-3"
-                      onClick={() => {
-                        setSelectedCouponId("");
-                      }}
-                    >
-                      不使用優惠券
-                    </button>
-                  </div>
-                ) : null}
-                <div className="mt-3 max-h-32 overflow-auto rounded-lg border border-base-300 bg-base-100/60 p-2">
-                  <div className="mb-2 flex items-center justify-between text-sm">
-                    <span className="font-semibold">可用券</span>
-                    <span>{availableCoupons.length} 張</span>
-                  </div>
-                  {availableCoupons.length === 0 ? (
-                    <p className="text-sm opacity-70">
-                      還沒有可用優惠券，先玩一局。
-                    </p>
-                  ) : (
-                    <div className="grid gap-2">
-                      {availableCoupons.map((coupon) => (
-                        <button
-                          key={coupon.id}
-                          type="button"
-                          className={`btn btn-xs justify-between ${
-                            selectedCouponId === coupon.id
-                              ? "btn-success"
-                              : "btn-outline"
-                          }`}
-                          onClick={() => {
-                            setSelectedCouponId(coupon.id);
-                          }}
-                        >
-                          <span>{coupon.label}</span>
-                          <span>折 ${coupon.discount}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 flex-1">
-                <article className="rounded-lg border border-base-300 bg-base-100/80 p-4">
-                  <h3 className="font-bold">早餐記憶翻牌</h3>
-                  <p className="text-sm opacity-75 min-h-12 mt-2">
-                    找出兩組相同餐點。步數越少，折扣越高。
-                  </p>
-                  <div className="mt-3 grid grid-cols-4 gap-2">
-                    {memoryCards.map((card) => {
-                      const isVisible =
-                        flippedMemoryCardIds.includes(card.id) ||
-                        matchedMemoryCardIds.includes(card.id);
-                      return (
-                        <button
-                          key={card.id}
-                          type="button"
-                          className={`btn h-16 min-h-0 text-base ${
-                            matchedMemoryCardIds.includes(card.id)
-                              ? "btn-success"
-                              : isVisible
-                                ? "btn-warning"
-                                : "btn-outline"
-                          }`}
-                          onClick={() => {
-                            handleMemoryCardClick(card);
-                          }}
-                        >
-                          {isVisible ? card.label : "?"}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="mt-3 flex items-center justify-between text-sm">
-                    <span>步數 {memoryMoves}</span>
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-outline"
-                      onClick={resetMemoryGame}
-                    >
-                      重開
-                    </button>
-                  </div>
-                </article>
-
-                <article className="rounded-lg border border-base-300 bg-base-100/80 p-4">
-                  <h3 className="font-bold">早餐幸運轉盤</h3>
-                  <p className="text-sm opacity-75 min-h-12 mt-2">
-                    轉盤停在哪一格，就把那張券存進錢包。
-                  </p>
-                  <div className="relative mx-auto mt-4 h-28 w-28">
-                    <div className="absolute left-1/2 top-[-0.35rem] z-10 -translate-x-1/2 text-warning">
-                      ▼
-                    </div>
-                    <div
-                      className="grid h-full w-full place-items-center rounded-full border-4 border-warning transition-transform duration-700 ease-out"
-                      style={{
-                        background:
-                          "conic-gradient(#fbbf24 0 120deg, #38bdf8 120deg 240deg, #34d399 240deg 360deg)",
-                        transform: `rotate(${wheelRotation}deg)`,
-                      }}
-                    >
-                      <span className="rounded-full bg-base-100/90 px-3 py-1 text-xs font-bold">
-                        START
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-warning mt-4 w-full"
-                    disabled={isWheelSpinning}
-                    onClick={spinCouponWheel}
-                  >
-                    {isWheelSpinning ? "轉動中..." : "轉一下"}
-                  </button>
-                </article>
-
-                <article className="rounded-lg border border-base-300 bg-base-100/80 p-4">
-                  <h3 className="font-bold">營業時間快問快答</h3>
-                  <p className="text-sm opacity-75 min-h-12 mt-2">
-                    Devin 的早餐店營業時間是哪一段？
-                  </p>
-                  <div className="mt-3 grid gap-2">
-                    {quizOptions.map((option) => (
-                      <button
-                        key={option.label}
-                        type="button"
-                        className={`btn btn-sm ${
-                          quizAnswer === option.label
-                            ? option.correct
-                              ? "btn-success"
-                              : "btn-error"
-                            : "btn-outline"
-                        }`}
-                        onClick={() => {
-                          answerCouponQuiz(option);
-                        }}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                </article>
-              </div>
-            </div>
-          </section>
-        ) : null}
-
         {!canAccessCurrentRoute ? (
           <section className="max-w-xl mx-auto card bg-base-100 shadow-sm mb-8">
             <div className="card-body">
@@ -1779,30 +1034,14 @@ export default function App() {
                   <option value="staff">店員</option>
                   <option value="chef">廚師</option>
                 </select>
-                <label className="form-control gap-2">
-                  <div className="label p-0">
-                    <span className="label-text font-semibold">
-                      申請原因需填寫 10 個字以上
-                    </span>
-                    <span
-                      className={`label-text-alt ${
-                        roleRequestReason.trim().length >= 10
-                          ? "text-success"
-                          : "text-warning"
-                      }`}
-                    >
-                      {roleRequestReason.trim().length}/10
-                    </span>
-                  </div>
-                  <textarea
-                    className="textarea textarea-bordered min-h-24"
-                    value={roleRequestReason}
-                    onChange={(event) => {
-                      setRoleRequestReason(event.target.value);
-                    }}
-                    placeholder="例如：我想協助櫃台處理訂單與取餐通知"
-                  />
-                </label>
+                <textarea
+                  className="textarea textarea-bordered min-h-24"
+                  value={roleRequestReason}
+                  onChange={(event) => {
+                    setRoleRequestReason(event.target.value);
+                  }}
+                  placeholder="申請原因"
+                />
                 <button
                   className="btn btn-outline"
                   onClick={() => {
@@ -1899,7 +1138,6 @@ export default function App() {
                   <tr>
                     <th>訂單</th>
                     <th>狀態</th>
-                    <th>預約取餐</th>
                     <th>內容</th>
                     {roleView !== "chef" ? <th>金額</th> : null}
                     <th>處理</th>
@@ -1915,25 +1153,9 @@ export default function App() {
                         </span>
                       </td>
                       <td>
-                        {formatOrderDateTime(order.pickupAt)}
-                      </td>
-                      <td>
-                        <div>
-                          {order.items
-                            .map((detail) => formatOrderItemText(detail))
-                            .join("、")}
-                        </div>
-                        {order.note ? (
-                          <div className="text-xs opacity-70 mt-1">
-                            備註：{order.note}
-                          </div>
-                        ) : null}
-                        {order.couponLabel && order.discount ? (
-                          <div className="text-xs text-success mt-1">
-                            優惠券：{order.couponLabel}，折抵 $
-                            {order.discount}
-                          </div>
-                        ) : null}
+                        {order.items
+                          .map((detail) => `${detail.item.name} x${detail.qty}`)
+                          .join("、")}
                       </td>
                       {roleView !== "chef" ? <td>${order.total}</td> : null}
                       <td>
@@ -1965,10 +1187,10 @@ export default function App() {
                   ))}
                   {submittedOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={roleView === "chef" ? 5 : 6}>
+                      <td colSpan={roleView === "chef" ? 4 : 5}>
                         {roleView === "chef"
                           ? "目前沒有需要製作的訂單。"
-                          : "目前沒有送出的購物車。"}
+                          : "目前沒有送出的訂單。"}
                       </td>
                     </tr>
                   ) : null}
@@ -2223,80 +1445,48 @@ export default function App() {
                 {category}
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {(grouped.groupedItems[category] || []).map((item) => {
-                  const quantity = cartQtyByItemId[item.id] ?? 0;
-
-                  return (
-                    <div
-                      key={item.id}
-                      className="card bg-base-100 shadow-md hover:shadow-lg transition-shadow"
-                    >
-                      <figure className="h-44 overflow-hidden bg-base-300">
-                        <img
-                          src={item.image_url}
-                          alt={item.name}
-                          className="w-full h-full object-cover"
-                          loading="lazy"
-                          onError={(event) => {
-                            const target = event.currentTarget;
-                            target.src =
-                              "https://images.unsplash.com/photo-1526318896980-cf78c088247c?auto=format&fit=crop&w=800&q=80";
+                {(grouped.groupedItems[category] || []).map((item) => (
+                  <div
+                    key={item.id}
+                    className="card bg-base-100 shadow-md hover:shadow-lg transition-shadow"
+                  >
+                    <figure className="h-44 overflow-hidden bg-base-300">
+                      <img
+                        src={item.image_url}
+                        alt={item.name}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                        onError={(event) => {
+                          const target = event.currentTarget;
+                          target.src =
+                            "https://images.unsplash.com/photo-1526318896980-cf78c088247c?auto=format&fit=crop&w=800&q=80";
+                        }}
+                      />
+                    </figure>
+                    <div className="card-body">
+                      <h3 className="card-title text-lg">{item.name}</h3>
+                      <p className="text-sm opacity-80 line-clamp-2 min-h-[2.75rem]">
+                        {item.description}
+                      </p>
+                      <div className="card-actions justify-between items-center">
+                        <span className="text-xl font-bold text-success">
+                          ${item.price}
+                        </span>
+                        <button
+                          className="btn btn-sm btn-primary"
+                          onClick={() => {
+                            void addToCart(item);
                           }}
-                        />
-                      </figure>
-                      <div className="card-body">
-                        <h3 className="card-title text-lg">{item.name}</h3>
-                        <p className="text-sm opacity-80 line-clamp-2 min-h-[2.75rem]">
-                          {item.description}
-                        </p>
-                        <div className="card-actions justify-between items-center gap-3">
-                          <span className="text-xl font-bold text-success">
-                            ${item.price}
-                          </span>
-                          {quantity > 0 ? (
-                            <div className="join">
-                              <button
-                                className="btn btn-sm join-item"
-                                onClick={() => {
-                                  void setCartItemQty(item, quantity - 1);
-                                }}
-                                disabled={activeItemId === item.id}
-                                aria-label={`減少 ${item.name} 數量`}
-                              >
-                                -
-                              </button>
-                              <span className="btn btn-sm join-item no-animation pointer-events-none min-w-12">
-                                {activeItemId === item.id ? "..." : quantity}
-                              </span>
-                              <button
-                                className="btn btn-sm btn-primary join-item"
-                                onClick={() => {
-                                  void setCartItemQty(item, quantity + 1);
-                                }}
-                                disabled={activeItemId === item.id}
-                                aria-label={`增加 ${item.name} 數量`}
-                              >
-                                +
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              className="btn btn-sm btn-primary"
-                              onClick={() => {
-                                void addToCart(item);
-                              }}
-                              disabled={activeItemId === item.id}
-                            >
-                              {activeItemId === item.id
-                                ? "加入中..."
-                                : "加入購物車"}
-                            </button>
-                          )}
-                        </div>
+                          disabled={activeItemId === item.id}
+                        >
+                          {activeItemId === item.id
+                            ? "加入中..."
+                            : `加入購物車${cartQtyByItemId[item.id] ? ` (${cartQtyByItemId[item.id]})` : ""}`}
+                        </button>
                       </div>
                     </div>
-                  );
-                })}
+                  </div>
+                ))}
               </div>
             </div>
           ))
@@ -2325,29 +1515,18 @@ export default function App() {
                         <h3 className="font-semibold">訂單 #{order.id}</h3>
                         <span className="badge badge-success">已送出</span>
                       </div>
-                      <p className="text-sm font-medium">
-                        預約取餐：{formatOrderDateTime(order.pickupAt)}
-                      </p>
                       <p className="text-sm opacity-70">
-                        建立時間：{formatOrderDateTime(order.createdAt)}
+                        建立時間：{order.createdAt}
                       </p>
-                      {order.note ? (
-                        <p className="text-sm opacity-80">備註：{order.note}</p>
-                      ) : null}
-                      {order.couponLabel && order.discount ? (
-                        <p className="text-sm text-success">
-                          優惠券：{order.couponLabel}，折抵 ${order.discount}
-                        </p>
-                      ) : null}
                       <ul className="text-sm list-disc pl-5 space-y-1">
                         {order.items.map((detail) => (
                           <li key={`${order.id}-${detail.item.id}`}>
-                            {formatOrderItemText(detail)}
+                            {detail.item.name} x {detail.qty}
                           </li>
                         ))}
                       </ul>
                       <p className="font-bold text-right">
-                        應付 ${order.total}
+                        總額 ${order.total}
                       </p>
                     </div>
                   </article>
@@ -2369,7 +1548,7 @@ export default function App() {
           />
           <aside className="fixed right-0 top-0 h-full w-full max-w-md bg-base-100 shadow-2xl z-10 flex flex-col">
             <div className="p-4 border-b border-base-300 flex items-center justify-between">
-              <h2 className="text-xl font-bold">送出訂單(購物車明細)</h2>
+              <h2 className="text-xl font-bold">購物車明細</h2>
               <button
                 className="btn btn-sm btn-ghost"
                 onClick={() => {
@@ -2390,78 +1569,15 @@ export default function App() {
                   {cartDetails.map((detail) => (
                     <li
                       key={detail.itemId}
-                      className="p-3 rounded-lg bg-base-200 space-y-3"
+                      className="p-3 rounded-lg bg-base-200 flex items-center justify-between"
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="font-semibold">{detail.item.name}</p>
-                          <p className="text-sm opacity-70">
-                            單價 ${detail.item.price} x {detail.qty}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-3 shrink-0">
-                          <div className="join">
-                            <button
-                              className="btn btn-xs join-item"
-                              onClick={() => {
-                                void setCartItemQty(detail.item, detail.qty - 1);
-                              }}
-                              disabled={activeItemId === detail.itemId}
-                              aria-label={`減少 ${detail.item.name} 數量`}
-                            >
-                              -
-                            </button>
-                            <span className="btn btn-xs join-item no-animation pointer-events-none min-w-10">
-                              {activeItemId === detail.itemId
-                                ? "..."
-                                : detail.qty}
-                            </span>
-                            <button
-                              className="btn btn-xs btn-primary join-item"
-                              onClick={() => {
-                                void setCartItemQty(detail.item, detail.qty + 1);
-                              }}
-                              disabled={activeItemId === detail.itemId}
-                              aria-label={`增加 ${detail.item.name} 數量`}
-                            >
-                              +
-                            </button>
-                          </div>
-                          <p className="font-bold min-w-16 text-right">
-                            ${detail.subtotal}
-                          </p>
-                        </div>
-                      </div>
-                      <label className="form-control gap-1">
-                        <span className="label-text text-xs opacity-70">
-                          客製化
-                        </span>
-                        <textarea
-                          className="textarea textarea-bordered textarea-sm min-h-20"
-                          value={detail.customization}
-                          maxLength={200}
-                          placeholder="例：無糖少冰、不要醬、蛋熟一點"
-                          onChange={(event) => {
-                            updateCartItemCustomization(
-                              detail.itemId,
-                              event.target.value,
-                            );
-                          }}
-                          onBlur={(event) => {
-                            void setCartItemQty(
-                              detail.item,
-                              detail.qty,
-                              event.currentTarget.value,
-                            );
-                          }}
-                          disabled={
-                            activeItemId === detail.itemId || isSubmittingOrder
-                          }
-                        />
-                        <p className="text-right text-xs opacity-60">
-                          {detail.customization.length}/200
+                      <div>
+                        <p className="font-semibold">{detail.item.name}</p>
+                        <p className="text-sm opacity-70">
+                          單價 ${detail.item.price} x {detail.qty}
                         </p>
-                      </label>
+                      </div>
+                      <p className="font-bold">${detail.subtotal}</p>
                     </li>
                   ))}
                 </ul>
@@ -2469,109 +1585,13 @@ export default function App() {
             </div>
 
             <div className="p-4 border-t border-base-300 space-y-3">
-              <label className="form-control w-full">
-                <div className="label">
-                  <span className="label-text font-semibold">預約取餐日期</span>
-                </div>
-                <input
-                  type="date"
-                  className="input input-bordered w-full"
-                  value={reservationDateValue || reservationDateMin}
-                  min={reservationDateMin}
-                  onChange={(event) => {
-                    setReservationPickupAt(
-                      joinDateAndTime(
-                        event.target.value,
-                        reservationTimeValue || defaultReservationTimeValue,
-                      ),
-                    );
-                  }}
-                  disabled={cartDetails.length === 0 || isSubmittingOrder}
-                />
-                <span className="label-text-alt mt-2 opacity-70">
-                  營業時間 06:00-10:00，每 10 分鐘可預約一次。
-                </span>
-                <div className="grid max-h-40 grid-cols-3 gap-2 overflow-auto pr-1 mt-3">
-                  {reservationPresetSlots.map((slot) => (
-                    <button
-                      key={`drawer-${slot.hour}-${slot.minute}`}
-                      type="button"
-                      className={`btn btn-xs ${
-                        reservationPickupAt === slot.value
-                          ? "btn-primary"
-                          : "btn-outline"
-                      }`}
-                      disabled={
-                        slot.disabled ||
-                        cartDetails.length === 0 ||
-                        isSubmittingOrder
-                      }
-                      onClick={() => {
-                        setReservationPickupAt(slot.value);
-                      }}
-                    >
-                      {slot.timeLabel}
-                    </button>
-                  ))}
-                </div>
-              </label>
-              <label className="form-control w-full">
-                <div className="label">
-                  <span className="label-text font-semibold">備註</span>
-                </div>
-                <textarea
-                  className="textarea textarea-bordered min-h-20"
-                  value={reservationNote}
-                  maxLength={200}
-                  placeholder="例如：不要辣、餐點分袋"
-                  onChange={(event) => {
-                    setReservationNote(event.target.value);
-                  }}
-                  disabled={cartDetails.length === 0 || isSubmittingOrder}
-                />
-              </label>
-              <label className="form-control w-full">
-                <div className="label">
-                  <span className="label-text font-semibold">優惠券</span>
-                  <span className="label-text-alt">
-                    可用 {availableCoupons.length} 張
-                  </span>
-                </div>
-                <select
-                  className="select select-bordered"
-                  value={selectedCouponId}
-                  onChange={(event) => {
-                    setSelectedCouponId(
-                      event.target.value ? Number(event.target.value) : "",
-                    );
-                  }}
-                  disabled={cartDetails.length === 0 || isSubmittingOrder}
-                >
-                  <option value="">不使用優惠券</option>
-                  {availableCoupons.map((coupon) => (
-                    <option key={coupon.id} value={coupon.id}>
-                      {coupon.label}（折 ${coupon.discount}）
-                    </option>
-                  ))}
-                </select>
-              </label>
               <div className="flex items-center justify-between font-semibold">
                 <span>總件數</span>
                 <span>{cartItemCount}</span>
               </div>
-              <div className="flex items-center justify-between">
-                <span>商品小計</span>
-                <span>${cartTotal}</span>
-              </div>
-              {selectedCoupon ? (
-                <div className="flex items-center justify-between text-success">
-                  <span>{selectedCoupon.label}</span>
-                  <span>-${couponDiscount}</span>
-                </div>
-              ) : null}
               <div className="flex items-center justify-between text-lg font-bold">
-                <span>應付金額</span>
-                <span>${payableCartTotal}</span>
+                <span>總金額</span>
+                <span>${cartTotal}</span>
               </div>
               <button
                 className="btn btn-error btn-outline w-full"
@@ -2587,13 +1607,9 @@ export default function App() {
                 onClick={() => {
                   void submitOrder();
                 }}
-                disabled={
-                  cartDetails.length === 0 ||
-                  isSubmittingOrder ||
-                  !reservationPickupAt
-                }
+                disabled={cartDetails.length === 0 || isSubmittingOrder}
               >
-                {isSubmittingOrder ? "送出中..." : "送出購物車"}
+                {isSubmittingOrder ? "送出中..." : "送出訂單"}
               </button>
             </div>
           </aside>

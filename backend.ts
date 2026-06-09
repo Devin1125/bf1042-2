@@ -11,7 +11,6 @@ import {
   createMenuItemBodySchema,
   createRoleRequestBodySchema,
   deleteMenuItemParamsSchema,
-  earnCouponBodySchema,
   getOrderByIdParamsSchema,
   healthResponseSchema,
   listRoleRequestsQuerySchema,
@@ -27,7 +26,6 @@ import {
   setUserRolesBodySchema,
   setUserRolesParamsSchema,
   sessionUserResponseSchema,
-  submitOrderBodySchema,
   submitOrderParamsSchema,
   toOrderResponse,
   updateMenuItemBodySchema,
@@ -36,14 +34,11 @@ import {
   updateOrderParamsSchema,
   updateOrderStatusBodySchema,
   updateOrderStatusParamsSchema,
-  userCouponListResponseSchema,
-  userCouponResponseSchema,
 } from "./shared/route-schemas.ts";
 import { createStore } from "./store/index.ts";
 import { auth, getCurrentUser } from "./auth/better-auth.ts";
 import { canAccessResource, hasAnyRole, requireAnyRole, requireRole } from "./shared/guards.ts";
 import type { AdminUser, Role, RoleRequest } from "./shared/contracts.ts";
-import { getBreakfastCouponByCode } from "./shared/coupons.ts";
 import { db } from "./db/client.ts";
 import { user as userTable } from "./db/auth-schema.ts";
 import { roleRequestsTable } from "./db/schema.ts";
@@ -55,15 +50,6 @@ const allowedOrigin = process.env.API_ALLOWED_ORIGIN || "*";
 const store = createStore({ dataFilePath: "./data/store.json" });
 const hasPublicAssets =
   existsSync("./public") && existsSync("./public/index.html");
-const businessOpenHour = 6;
-const businessCloseHour = 10;
-const reservationSlotStepMinutes = 10;
-const taipeiHourMinuteFormatter = new Intl.DateTimeFormat("en-US", {
-  timeZone: "Asia/Taipei",
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false,
-});
 
 // ─── Auth Helper ──────────────────────────────────────────────────────────────
 // 簡化的 helper 函數，用於保護路由並獲取 user，失敗時拋出 401 錯誤
@@ -85,29 +71,6 @@ const kitchenRoles: Role[] = ["chef", "owner", "admin"];
 function toIso(value: Date | string | null | undefined): string | undefined {
   if (!value) return undefined;
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
-}
-
-function isWithinBusinessHoursTaipei(date: Date): boolean {
-  const parts = taipeiHourMinuteFormatter.formatToParts(date);
-  const hourText = parts.find((part) => part.type === "hour")?.value ?? "0";
-  const minuteText = parts.find((part) => part.type === "minute")?.value ?? "0";
-  const hour = Number.parseInt(hourText, 10);
-  const minute = Number.parseInt(minuteText, 10);
-  const normalizedHour = hour === 24 ? 0 : hour;
-  const minutes = normalizedHour * 60 + minute;
-
-  return (
-    minutes >= businessOpenHour * 60 &&
-    minutes <= businessCloseHour * 60
-  );
-}
-
-function isTenMinuteReservationSlot(date: Date): boolean {
-  return (
-    date.getMinutes() % reservationSlotStepMinutes === 0 &&
-    date.getSeconds() === 0 &&
-    date.getMilliseconds() === 0
-  );
 }
 
 function mapRoleRequest(
@@ -470,63 +433,6 @@ app.post(
   },
 );
 
-// 使用者優惠券錢包
-app.get(
-  "/api/coupons",
-  async ({ request }) => {
-    const user = await requireUser(request);
-    const coupons = await store.getCouponsByUserId(user.id);
-    return { data: coupons };
-  },
-  {
-    detail: {
-      tags: ["coupons"],
-      summary: "List user coupons",
-      description: "Return the coupon wallet belonging to the current user.",
-    },
-    response: {
-      200: userCouponListResponseSchema,
-      401: apiErrorResponseSchema,
-    },
-  },
-);
-
-app.post(
-  "/api/coupons/earn",
-  async ({ body, request, set }) => {
-    const user = await requireUser(request);
-    const coupon = getBreakfastCouponByCode(body.couponCode);
-    if (!coupon) {
-      set.status = 400;
-      return { error: "Invalid coupon code" };
-    }
-
-    const earnedCoupon = await store.createCoupon({
-      userId: user.id,
-      code: coupon.code,
-      label: coupon.label,
-      discount: coupon.discount,
-      earnedFrom: body.earnedFrom,
-    });
-
-    set.status = 201;
-    return { data: earnedCoupon };
-  },
-  {
-    body: earnCouponBodySchema,
-    detail: {
-      tags: ["coupons"],
-      summary: "Earn a coupon",
-      description: "Save a coupon earned from a breakfast mini game.",
-    },
-    response: {
-      201: userCouponResponseSchema,
-      400: apiErrorResponseSchema,
-      401: apiErrorResponseSchema,
-    },
-  },
-);
-
 // 獲取單筆訂單
 app.get(
   "/api/orders/:id",
@@ -855,9 +761,6 @@ app.patch(
       userId: user.id,
       itemId: body.itemId,
       qty: body.qty,
-      ...(body.customization !== undefined
-        ? { customization: body.customization.trim() }
-        : {}),
     });
 
     if (!result.ok && result.code === "ORDER_NOT_FOUND") {
@@ -893,8 +796,7 @@ app.patch(
     detail: {
       tags: ["orders"],
       summary: "Update order item quantity",
-      description:
-        "Set the quantity and customization of a menu item within a pending order.",
+      description: "Set the quantity of a menu item within a pending order.",
     },
     response: {
       200: orderResponseEnvelopeSchema,
@@ -910,32 +812,10 @@ app.patch(
 // 送出訂單
 app.post(
   "/api/orders/:id/submit",
-  async ({ params, body, request, set }) => {
+  async ({ params, request, set }) => {
     const user = await requireUser(request);
     const orderId = parseInt(params.id, 10);
-    const trimmedNote = body.note?.trim();
-    const pickupDate = new Date(body.pickupAt);
-    if (pickupDate.getTime() < Date.now() - 60_000) {
-      set.status = 400;
-      return { error: "Pickup time cannot be in the past" };
-    }
-
-    if (!isWithinBusinessHoursTaipei(pickupDate)) {
-      set.status = 400;
-      return { error: "Pickup time must be between 06:00 and 10:00 Asia/Taipei" };
-    }
-
-    if (!isTenMinuteReservationSlot(pickupDate)) {
-      set.status = 400;
-      return { error: "Pickup time must use a 10-minute interval" };
-    }
-
-    const result = await store.submitOrder(orderId, {
-      userId: user.id,
-      pickupAt: body.pickupAt,
-      note: trimmedNote ? trimmedNote : undefined,
-      couponId: body.couponId,
-    });
+    const result = await store.submitOrder(orderId, { userId: user.id });
 
     if (!result.ok && result.code === "ORDER_NOT_FOUND") {
       set.status = 404;
@@ -957,11 +837,6 @@ app.post(
       return { error: "Empty order cannot be submitted" };
     }
 
-    if (!result.ok && result.code === "COUPON_NOT_FOUND") {
-      set.status = 400;
-      return { error: "Coupon is not available" };
-    }
-
     if (!result.ok) {
       set.status = 500;
       return { error: "Unexpected store state" };
@@ -971,12 +846,10 @@ app.post(
   },
   {
     params: submitOrderParamsSchema,
-    body: submitOrderBodySchema,
     detail: {
       tags: ["orders"],
       summary: "Submit order",
-      description:
-        "Submit a pending order that belongs to the user with a reserved pickup time.",
+      description: "Submit a pending order that belongs to the user.",
     },
     response: {
       200: orderResponseEnvelopeSchema,
